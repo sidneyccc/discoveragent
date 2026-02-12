@@ -3,18 +3,17 @@ const path = require('path');
 
 const distDir = path.join(__dirname, 'dist');
 
-// Icon font CDN links
+// Icon font CDN links - using proper web font URLs
 const iconFonts = `
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@expo/vector-icons@14.0.4/build/vendor/react-native-vector-icons/Fonts/FontAwesome.ttf" as="font" crossorigin>
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@expo/vector-icons@14.0.4/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf" as="font" crossorigin>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.4.47/css/materialdesignicons.min.css">
   <style>
-    @font-face {
-      font-family: 'FontAwesome';
-      src: url('https://cdn.jsdelivr.net/npm/@expo/vector-icons@14.0.4/build/vendor/react-native-vector-icons/Fonts/FontAwesome.ttf') format('truetype');
+    /* Map Expo icon names to web font classes */
+    [data-testid*="FontAwesome"] {
+      font-family: 'Font Awesome 6 Free', 'Font Awesome 6 Brands' !important;
     }
-    @font-face {
-      font-family: 'MaterialCommunityIcons';
-      src: url('https://cdn.jsdelivr.net/npm/@expo/vector-icons@14.0.4/build/vendor/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf') format('truetype');
+    [data-testid*="MaterialCommunityIcons"] {
+      font-family: 'Material Design Icons' !important;
     }
   </style>`;
 

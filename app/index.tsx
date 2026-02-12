@@ -1,7 +1,8 @@
 import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking } from 'react-native';
 import { Link } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
+import { FaRedditAlien } from 'react-icons/fa';
+import { HiNewspaper } from 'react-icons/hi';
 
 export default function HomeScreen() {
   const openURL = (url: string) => {
@@ -30,7 +31,7 @@ export default function HomeScreen() {
             style={styles.iconButton}
             onPress={() => openURL('https://www.reddit.com')}
           >
-            <FontAwesome name="reddit-alien" size={40} color="#FF4500" />
+            <FaRedditAlien size={40} color="#FF4500" />
             <Text style={styles.iconLabel}>Reddit</Text>
           </TouchableOpacity>
 
@@ -38,7 +39,7 @@ export default function HomeScreen() {
             style={styles.iconButton}
             onPress={() => openURL('https://www.wsj.com')}
           >
-            <MaterialCommunityIcons name="newspaper-variant" size={40} color="#000" />
+            <HiNewspaper size={40} color="#000" />
             <Text style={styles.iconLabel}>WSJ</Text>
           </TouchableOpacity>
         </View>
