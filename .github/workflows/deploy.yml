@@ -32,6 +32,8 @@ jobs:
         run: npm ci
 
       - name: Build web app
+        env:
+          EXPO_PUBLIC_ROUTER_BASE: /discoveragent
         run: npm run build:web
 
       - name: Setup Pages
