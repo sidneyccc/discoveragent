@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>DiscoverAgent</title>
+    <script>
+      // Redirect to the base URL with the path as a hash
+      // This allows the single-page app to handle the routing
+      const path = window.location.pathname.replace('/discoveragent', '');
+      window.location.replace('/discoveragent/#' + path);
+    </script>
+  </head>
+  <body>
+    Redirecting...
+  </body>
+</html>
