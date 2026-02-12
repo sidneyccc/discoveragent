@@ -33,6 +33,7 @@ Instructions:
 - Prefer the prioritized trusted sources above when relevant.
 - If information is not available from the trusted list, you may include additional sources, but mark them clearly as "Additional source (not in prioritized list)".
 - Do not invent direct quotes or fake citations.
+- Match the response language to the original question language.
 - Keep output concise and structured with headings.
 - Use clear paragraph breaks. Do not return one long line.
 - Keep total output at or below 500 words.
@@ -197,6 +198,7 @@ Please return:
 6) "### Coverage Notes" with uncertainty/gaps.
 7) Insert a blank line between every section and between clusters.
 8) Keep the full response to 500 words maximum.
+9) Use the same language as the original question.
 `.trim();
 
     try {
