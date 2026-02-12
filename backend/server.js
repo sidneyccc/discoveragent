@@ -4,6 +4,9 @@ const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3001);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 10;
+const requestLogByIp = new Map();
 const TRUSTED_SOURCES = [
   'Reuters',
   'AP News',
@@ -40,14 +43,43 @@ Instructions:
 - End with a short "Coverage Notes" section calling out where evidence is weak or inferred.
 `.trim();
 
-function sendJson(res, statusCode, payload) {
+function sendJson(res, statusCode, payload, extraHeaders = {}) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
+    ...extraHeaders,
   });
   res.end(JSON.stringify(payload));
+}
+
+function getClientIp(req) {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    return forwardedFor.split(',')[0].trim();
+  }
+  if (Array.isArray(forwardedFor) && forwardedFor.length > 0) {
+    return String(forwardedFor[0]).split(',')[0].trim();
+  }
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW_MS;
+  const history = requestLogByIp.get(ip) || [];
+  const recent = history.filter((ts) => ts > windowStart);
+
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    requestLogByIp.set(ip, recent);
+    const retryAfterSec = Math.max(1, Math.ceil((recent[0] + RATE_LIMIT_WINDOW_MS - now) / 1000));
+    return { allowed: false, retryAfterSec };
+  }
+
+  recent.push(now);
+  requestLogByIp.set(ip, recent);
+  return { allowed: true, retryAfterSec: 0 };
 }
 
 function extractAnswer(responseJson) {
@@ -253,11 +285,33 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && req.url === '/api/ask') {
+    const ip = getClientIp(req);
+    const limitResult = checkRateLimit(ip);
+    if (!limitResult.allowed) {
+      sendJson(
+        res,
+        429,
+        { error: 'Rate limit exceeded. Maximum 10 requests per minute per IP.' },
+        { 'Retry-After': String(limitResult.retryAfterSec) }
+      );
+      return;
+    }
     handleAsk(req, res);
     return;
   }
 
   if (req.method === 'POST' && req.url === '/api/categorize') {
+    const ip = getClientIp(req);
+    const limitResult = checkRateLimit(ip);
+    if (!limitResult.allowed) {
+      sendJson(
+        res,
+        429,
+        { error: 'Rate limit exceeded. Maximum 10 requests per minute per IP.' },
+        { 'Retry-After': String(limitResult.retryAfterSec) }
+      );
+      return;
+    }
     handleCategorize(req, res);
     return;
   }

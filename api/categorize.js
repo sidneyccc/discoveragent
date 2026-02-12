@@ -1,5 +1,8 @@
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 10;
+const requestLogByIp = new Map();
 const TRUSTED_SOURCES = [
   'Reuters',
   'AP News',
@@ -62,6 +65,38 @@ function extractAnswer(responseJson) {
   return '';
 }
 
+function getClientIp(req) {
+  const forwardedFor = req.headers['x-forwarded-for'];
+  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
+    return forwardedFor.split(',')[0].trim();
+  }
+  if (Array.isArray(forwardedFor) && forwardedFor.length > 0) {
+    return String(forwardedFor[0]).split(',')[0].trim();
+  }
+  const realIp = req.headers['x-real-ip'];
+  if (typeof realIp === 'string' && realIp.trim()) {
+    return realIp.trim();
+  }
+  return req.socket?.remoteAddress || req.connection?.remoteAddress || 'unknown';
+}
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW_MS;
+  const history = requestLogByIp.get(ip) || [];
+  const recent = history.filter((ts) => ts > windowStart);
+
+  if (recent.length >= RATE_LIMIT_MAX_REQUESTS) {
+    requestLogByIp.set(ip, recent);
+    const retryAfterSec = Math.max(1, Math.ceil((recent[0] + RATE_LIMIT_WINDOW_MS - now) / 1000));
+    return { allowed: false, retryAfterSec };
+  }
+
+  recent.push(now);
+  requestLogByIp.set(ip, recent);
+  return { allowed: true, retryAfterSec: 0 };
+}
+
 module.exports = async function handler(req, res) {
   cors(res);
 
@@ -71,6 +106,13 @@ module.exports = async function handler(req, res) {
 
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed.' });
+  }
+
+  const ip = getClientIp(req);
+  const limitResult = checkRateLimit(ip);
+  if (!limitResult.allowed) {
+    res.setHeader('Retry-After', String(limitResult.retryAfterSec));
+    return res.status(429).json({ error: 'Rate limit exceeded. Maximum 10 requests per minute per IP.' });
   }
 
   const question = String(req.body?.question || '').trim();
