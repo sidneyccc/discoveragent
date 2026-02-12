@@ -28,6 +28,9 @@
       "output": "static"
     },
     "scheme": "discoveragent",
+    "experiments": {
+      "baseUrl": "/discoveragent"
+    },
     "plugins": [
       "expo-router"
     ]
