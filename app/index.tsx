@@ -1,8 +1,13 @@
-import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking } from 'react-native';
-import { Link } from 'expo-router';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking, ScrollView } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { FaRedditAlien } from 'react-icons/fa';
+import { FaHackerNews, FaRedditAlien, FaStackOverflow, FaWikipediaW } from 'react-icons/fa';
 import { HiNewspaper } from 'react-icons/hi';
+
+type Source = {
+  name: string;
+  url: string;
+  icon: JSX.Element;
+};
 
 export default function HomeScreen() {
   const openURL = (url: string) => {
@@ -13,11 +18,19 @@ export default function HomeScreen() {
     Linking.openURL(url);
   };
 
-  const handleRedditPress = () => openURL('https://www.reddit.com');
-  const handleWsjPress = () => openURL('https://www.wsj.com');
+  const sources: Source[] = [
+    { name: 'Reuters', url: 'https://www.reuters.com', icon: <HiNewspaper size={32} color="#111" /> },
+    { name: 'AP News', url: 'https://apnews.com', icon: <HiNewspaper size={32} color="#111" /> },
+    { name: 'BBC', url: 'https://www.bbc.com/news', icon: <HiNewspaper size={32} color="#111" /> },
+    { name: 'NPR', url: 'https://www.npr.org', icon: <HiNewspaper size={32} color="#111" /> },
+    { name: 'Hacker News', url: 'https://news.ycombinator.com', icon: <FaHackerNews size={32} color="#FF6600" /> },
+    { name: 'Reddit', url: 'https://www.reddit.com', icon: <FaRedditAlien size={32} color="#FF4500" /> },
+    { name: 'Stack Overflow', url: 'https://stackoverflow.com', icon: <FaStackOverflow size={32} color="#F48024" /> },
+    { name: 'Wikipedia', url: 'https://www.wikipedia.org', icon: <FaWikipediaW size={32} color="#111" /> },
+  ];
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <StatusBar style="auto" />
 
       <View style={styles.content}>
@@ -27,37 +40,26 @@ export default function HomeScreen() {
         </Text>
 
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Cross-Platform App</Text>
+          <Text style={styles.cardTitle}>Trusted Sources</Text>
           <Text style={styles.cardText}>
-            This app works seamlessly on both web and iOS using React Native and Expo.
+            Quick links to reputable news outlets and high-signal discussion communities.
           </Text>
         </View>
 
         <View style={styles.iconsContainer}>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={handleRedditPress}
-          >
-            <FaRedditAlien size={40} color="#FF4500" />
-            <Text style={styles.iconLabel}>Reddit</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={handleWsjPress}
-          >
-            <HiNewspaper size={40} color="#000" />
-            <Text style={styles.iconLabel}>WSJ</Text>
-          </TouchableOpacity>
+          {sources.map((source) => (
+            <TouchableOpacity
+              key={source.name}
+              style={styles.iconButton}
+              onPress={() => openURL(source.url)}
+            >
+              {source.icon}
+              <Text style={styles.iconLabel}>{source.name}</Text>
+            </TouchableOpacity>
+          ))}
         </View>
-
-        <Link href="/about" asChild>
-          <TouchableOpacity style={styles.button}>
-            <Text style={styles.buttonText}>Go to About</Text>
-          </TouchableOpacity>
-        </Link>
       </View>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -66,10 +68,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
+  contentContainer: {
+    flexGrow: 1,
+  },
   content: {
-    flex: 1,
     padding: 20,
-    justifyContent: 'center',
+    justifyContent: 'flex-start',
     alignItems: 'center',
   },
   title: {
@@ -111,8 +115,10 @@ const styles = StyleSheet.create({
   iconsContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 32,
-    marginBottom: 24,
+    flexWrap: 'wrap',
+    gap: 12,
+    width: '100%',
+    maxWidth: 480,
   },
   iconButton: {
     alignItems: 'center',
@@ -125,28 +131,14 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
-    minWidth: 100,
+    minWidth: 140,
+    flexBasis: '47%',
   },
   iconLabel: {
     marginTop: 8,
-    fontSize: 14,
+    fontSize: 13,
     color: '#333',
     fontWeight: '500',
-  },
-  button: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 32,
-    paddingVertical: 12,
-    borderRadius: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
+    textAlign: 'center',
   },
 });

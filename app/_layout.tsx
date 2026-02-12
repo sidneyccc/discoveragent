@@ -12,13 +12,6 @@ export default function RootLayout() {
             headerShown: true
           }}
         />
-        <Stack.Screen
-          name="about"
-          options={{
-            title: 'About',
-            headerShown: true
-          }}
-        />
       </Stack>
     </SafeAreaProvider>
   );
