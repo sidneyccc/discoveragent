@@ -25,8 +25,7 @@
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro",
-      "output": "static",
-      "publicPath": "/discoveragent/"
+      "output": "static"
     },
     "scheme": "discoveragent",
     "plugins": [

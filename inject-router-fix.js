@@ -3,71 +3,43 @@ const path = require('path');
 
 const distDir = path.join(__dirname, 'dist');
 
-// Script to inject before React loads to fix routing
+// Simpler script - just intercept history for navigation
 const routerFixScript = `
 <script>
-  // Fix Expo Router for GitHub Pages subdirectory - comprehensive approach
   (function() {
     var basePath = '/discoveragent';
-    var currentPath = window.location.pathname;
 
-    // If we're in the subdirectory, handle routing
-    if (currentPath.startsWith(basePath)) {
-      var routePath = currentPath.substring(basePath.length) || '/';
+    // Only intercept history methods for navigation
+    var originalPushState = history.pushState;
+    var originalReplaceState = history.replaceState;
 
-      // Store for later use
-      window.__EXPO_BASE_PATH__ = basePath;
-      window.__EXPO_ROUTER_BASE_PATH__ = basePath;
+    history.pushState = function(state, title, url) {
+      if (url && typeof url === 'string' && url.startsWith('/') && !url.startsWith(basePath) && !url.startsWith('http')) {
+        url = basePath + url;
+      }
+      return originalPushState.call(this, state, title, url);
+    };
 
-      // Override location.pathname getter to return path without base
-      var originalPathname = window.location.pathname;
-      Object.defineProperty(window.location, 'pathname', {
-        get: function() {
-          var fullPath = originalPathname;
-          if (history.state && history.state.__internalPath) {
-            fullPath = history.state.__internalPath;
-          }
-          if (fullPath.startsWith(basePath)) {
-            return fullPath.substring(basePath.length) || '/';
-          }
-          return fullPath;
-        },
-        set: function(value) {
-          originalPathname = value;
+    history.replaceState = function(state, title, url) {
+      if (url && typeof url === 'string' && url.startsWith('/') && !url.startsWith(basePath) && !url.startsWith('http')) {
+        url = basePath + url;
+      }
+      return originalReplaceState.call(this, state, title, url);
+    };
+
+    // Intercept link clicks
+    document.addEventListener('click', function(e) {
+      var target = e.target;
+      while (target && target.tagName !== 'A') {
+        target = target.parentElement;
+      }
+      if (target && target.tagName === 'A') {
+        var href = target.getAttribute('href');
+        if (href && href.startsWith('/') && !href.startsWith(basePath) && !href.startsWith('http')) {
+          target.setAttribute('href', basePath + href);
         }
-      });
-
-      // Intercept history methods to handle base path
-      var originalPushState = history.pushState;
-      var originalReplaceState = history.replaceState;
-
-      history.pushState = function(state, title, url) {
-        if (url && typeof url === 'string' && url.startsWith('/') && !url.startsWith(basePath) && !url.startsWith('http')) {
-          var fullUrl = basePath + url;
-          state = state || {};
-          state.__internalPath = fullUrl;
-          return originalPushState.call(this, state, title, fullUrl);
-        }
-        return originalPushState.call(this, state, title, url);
-      };
-
-      history.replaceState = function(state, title, url) {
-        if (url && typeof url === 'string' && url.startsWith('/') && !url.startsWith(basePath) && !url.startsWith('http')) {
-          var fullUrl = basePath + url;
-          state = state || {};
-          state.__internalPath = fullUrl;
-          return originalReplaceState.call(this, state, title, fullUrl);
-        }
-        return originalReplaceState.call(this, state, title, url);
-      };
-
-      // Set initial history state
-      history.replaceState(
-        { __internalPath: originalPathname },
-        document.title,
-        originalPathname
-      );
-    }
+      }
+    });
   })();
 </script>`;
 
