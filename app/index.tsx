@@ -11,6 +11,8 @@ type Source = {
 };
 
 export default function HomeScreen() {
+  const apiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || 'http://127.0.0.1:3001').replace(/\/$/, '');
+
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
   const [hasAsked, setHasAsked] = useState(false);
@@ -48,7 +50,7 @@ export default function HomeScreen() {
     setAnswerError('');
 
     try {
-      const res = await fetch('http://127.0.0.1:3001/api/ask', {
+      const res = await fetch(`${apiBaseUrl}/api/ask`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -67,7 +69,7 @@ export default function HomeScreen() {
 
       setAnswer(typeof data?.answer === 'string' ? data.answer : 'No answer text returned.');
     } catch {
-      setAnswerError('Could not connect to API server on 127.0.0.1:3001.');
+      setAnswerError(`Could not connect to API server at ${apiBaseUrl}.`);
     } finally {
       setIsLoading(false);
     }
