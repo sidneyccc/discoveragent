@@ -11,7 +11,13 @@ type Source = {
 };
 
 export default function HomeScreen() {
-  const apiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || 'http://127.0.0.1:3001').replace(/\/$/, '');
+  const defaultApiBaseUrl =
+    Platform.OS === 'web' &&
+    typeof window !== 'undefined' &&
+    window.location.hostname.endsWith('github.io')
+      ? 'https://discoveragent.vercel.app'
+      : 'http://127.0.0.1:3001';
+  const apiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || defaultApiBaseUrl).replace(/\/$/, '');
 
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
