@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <title>DiscoverAgent</title>
     <script>
-      // Redirect to the base URL with the path as a hash
-      // This allows the single-page app to handle the routing
-      const path = window.location.pathname.replace('/discoveragent', '');
-      window.location.replace('/discoveragent/#' + path);
+      // For GitHub Pages: Store the current path and redirect to index
+      // This allows the app to restore the intended route
+      sessionStorage.setItem('redirect', window.location.pathname + window.location.search);
+      window.location.replace('/discoveragent/');
     </script>
   </head>
   <body>
