@@ -116,9 +116,19 @@ export default function HomeScreen() {
   const [submittedQuestion, setSubmittedQuestion] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
+  const [voiceError, setVoiceError] = useState('');
   const [categorizedResult, setCategorizedResult] = useState('');
   const [categorizeError, setCategorizeError] = useState('');
   const recognitionRef = useRef<any>(null);
+  const mediaRecorderRef = useRef<any>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+
+  const appendToQuestion = (newText: string) => {
+    const trimmed = newText.trim();
+    if (!trimmed) return;
+    setQuestion((prev) => (prev.trim() ? `${prev.trim()} ${trimmed}` : trimmed));
+  };
 
   const openURL = (url: string) => {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -139,17 +149,165 @@ export default function HomeScreen() {
     { name: 'Wikipedia', url: 'https://www.wikipedia.org', icon: <FaWikipediaW size={32} color="#111" /> },
   ];
 
-  const canUseVoiceInput =
+  const isIOSWeb =
+    Platform.OS === 'web' &&
+    typeof navigator !== 'undefined' &&
+    /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  const canUseSpeechRecognition =
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
     !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+  const canUseAudioRecording =
+    Platform.OS === 'web' &&
+    typeof window !== 'undefined' &&
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia &&
+    !!(window as any).MediaRecorder;
+  const canUseVoiceInput = canUseSpeechRecognition || canUseAudioRecording;
 
-  const handleVoiceInput = () => {
-    if (!canUseVoiceInput || typeof window === 'undefined') return;
+  const stopMediaStream = () => {
+    if (!mediaStreamRef.current) return;
+    for (const track of mediaStreamRef.current.getTracks()) {
+      track.stop();
+    }
+    mediaStreamRef.current = null;
+  };
+
+  const blobToBase64 = (blob: Blob): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result;
+        if (typeof result !== 'string') {
+          reject(new Error('Failed to read recorded audio.'));
+          return;
+        }
+        const separatorIdx = result.indexOf(',');
+        resolve(separatorIdx >= 0 ? result.slice(separatorIdx + 1) : result);
+      };
+      reader.onerror = () => reject(new Error('Failed to read recorded audio.'));
+      reader.readAsDataURL(blob);
+    });
+
+  const transcribeAudioBlob = async (blob: Blob, mimeType: string) => {
+    setIsTranscribingVoice(true);
+    setVoiceError('');
+    try {
+      const audioBase64 = await blobToBase64(blob);
+      const res = await fetch(`${apiBaseUrl}/api/transcribe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audioBase64,
+          mimeType,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        const message = typeof data?.error === 'string' ? data.error : 'Failed to transcribe audio.';
+        const details = typeof data?.details === 'string' ? data.details : '';
+        setVoiceError(details ? `${message} ${details}` : message);
+        return;
+      }
+
+      const transcript = typeof data?.transcript === 'string' ? data.transcript.trim() : '';
+      if (!transcript) {
+        setVoiceError('No transcript returned from audio.');
+        return;
+      }
+      appendToQuestion(transcript);
+    } catch (error) {
+      setVoiceError(
+        error instanceof Error ? `Audio transcription failed: ${error.message}` : 'Audio transcription failed.'
+      );
+    } finally {
+      setIsTranscribingVoice(false);
+    }
+  };
+
+  const toggleAudioRecording = async () => {
+    if (!canUseAudioRecording || typeof window === 'undefined' || typeof navigator === 'undefined') {
+      setVoiceError('Audio recording is not supported on this browser.');
+      return;
+    }
+
+    const existingRecorder = mediaRecorderRef.current;
+    if (existingRecorder && existingRecorder.state !== 'inactive') {
+      try {
+        existingRecorder.stop();
+      } catch {
+        // no-op
+      }
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+
+      const MediaRecorderCtor = (window as any).MediaRecorder;
+      const recorder = new MediaRecorderCtor(stream);
+      const chunks: BlobPart[] = [];
+
+      recorder.ondataavailable = (event: any) => {
+        if (event?.data && event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+
+      recorder.onerror = () => {
+        setVoiceError('Audio recording failed.');
+        setIsListening(false);
+        mediaRecorderRef.current = null;
+        stopMediaStream();
+      };
+
+      recorder.onstop = async () => {
+        setIsListening(false);
+        mediaRecorderRef.current = null;
+        const mimeType = recorder.mimeType || 'audio/webm';
+        const blob = new Blob(chunks, { type: mimeType });
+        stopMediaStream();
+        if (!blob.size) {
+          setVoiceError('No audio captured. Please try again.');
+          return;
+        }
+        await transcribeAudioBlob(blob, mimeType);
+      };
+
+      mediaRecorderRef.current = recorder;
+      setVoiceError('');
+      recorder.start();
+      setIsListening(true);
+    } catch {
+      setVoiceError('Microphone access failed. Enable permission and try again.');
+      setIsListening(false);
+      mediaRecorderRef.current = null;
+      stopMediaStream();
+    }
+  };
+
+  const handleVoiceInput = async () => {
+    if (!canUseVoiceInput || typeof window === 'undefined') {
+      setVoiceError('Voice input is not supported on this browser.');
+      return;
+    }
+
+    if (isIOSWeb || !canUseSpeechRecognition) {
+      await toggleAudioRecording();
+      return;
+    }
 
     const SpeechRecognitionCtor =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognitionCtor) return;
+    if (!SpeechRecognitionCtor) {
+      setVoiceError('Voice input is not supported on this browser.');
+      return;
+    }
 
     if (recognitionRef.current) {
       try {
@@ -166,21 +324,37 @@ export default function HomeScreen() {
     recognition.lang = 'en-US';
     recognition.interimResults = false;
     recognition.continuous = false;
+    recognition.maxAlternatives = 1;
 
     recognition.onstart = () => {
+      setVoiceError('');
       setIsListening(true);
     };
 
     recognition.onresult = (event: any) => {
       const transcript = event?.results?.[0]?.[0]?.transcript?.trim();
       if (transcript) {
-        setQuestion(transcript);
+        appendToQuestion(transcript);
       }
     };
 
-    recognition.onerror = () => {
+    recognition.onerror = (event: any) => {
       setIsListening(false);
       recognitionRef.current = null;
+      const code = typeof event?.error === 'string' ? event.error : 'unknown-error';
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        setVoiceError('Microphone permission was denied. Enable mic access in browser settings.');
+        return;
+      }
+      if (code === 'language-not-supported') {
+        setVoiceError('Speech recognition language is not supported on this browser.');
+        return;
+      }
+      if (code === 'no-speech') {
+        setVoiceError('No speech detected. Try again in a quieter environment.');
+        return;
+      }
+      setVoiceError(`Voice input failed (${code}).`);
     };
 
     recognition.onend = () => {
@@ -189,7 +363,13 @@ export default function HomeScreen() {
     };
 
     recognitionRef.current = recognition;
-    recognition.start();
+    try {
+      recognition.start();
+    } catch (error) {
+      recognitionRef.current = null;
+      setIsListening(false);
+      setVoiceError(error instanceof Error ? `Voice input failed to start: ${error.message}` : 'Voice input failed to start.');
+    }
   };
 
   const handleCategorize = async () => {
@@ -266,6 +446,7 @@ export default function HomeScreen() {
               <TouchableOpacity
                 style={[styles.micIconButton, isListening ? styles.micIconButtonActive : styles.micIconButtonIdle]}
                 onPress={handleVoiceInput}
+                disabled={isTranscribingVoice}
               >
                 {isListening ? (
                   <FaStop size={14} color="#fff" />
@@ -275,6 +456,10 @@ export default function HomeScreen() {
               </TouchableOpacity>
             ) : null}
           </View>
+          {isTranscribingVoice ? (
+            <Text style={styles.voiceInfoText}>Transcribing voice...</Text>
+          ) : null}
+          {voiceError ? <Text style={styles.voiceErrorText}>{voiceError}</Text> : null}
 
           {submittedQuestion ? (
             <Text style={styles.statusText}>
@@ -467,6 +652,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#b42318',
     lineHeight: 22,
+  },
+  voiceInfoText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#334155',
+    lineHeight: 18,
+  },
+  voiceErrorText: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#b42318',
+    lineHeight: 18,
   },
   richTextBold: {
     fontWeight: '700',

@@ -4,6 +4,7 @@ const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3001);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const OPENAI_TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
 const requestLogByIp = new Map();
@@ -100,6 +101,15 @@ function extractAnswer(responseJson) {
   }
 
   return '';
+}
+
+function getAudioFileExtension(mimeType) {
+  if (!mimeType) return 'webm';
+  if (mimeType.includes('mp4') || mimeType.includes('m4a')) return 'm4a';
+  if (mimeType.includes('mpeg') || mimeType.includes('mp3')) return 'mp3';
+  if (mimeType.includes('wav')) return 'wav';
+  if (mimeType.includes('ogg')) return 'ogg';
+  return 'webm';
 }
 
 async function handleAsk(req, res) {
@@ -278,6 +288,83 @@ Please return:
   });
 }
 
+async function handleTranscribe(req, res) {
+  let body = '';
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  req.on('end', async () => {
+    let parsedBody;
+    try {
+      parsedBody = JSON.parse(body || '{}');
+    } catch {
+      sendJson(res, 400, { error: 'Invalid JSON body.' });
+      return;
+    }
+
+    const audioBase64 = String(parsedBody.audioBase64 || '').trim();
+    const mimeType = String(parsedBody.mimeType || 'audio/webm').trim();
+
+    if (!audioBase64) {
+      sendJson(res, 400, { error: 'audioBase64 is required.' });
+      return;
+    }
+
+    if (!OPENAI_API_KEY) {
+      sendJson(res, 500, { error: 'OPENAI_API_KEY is not set on the server.' });
+      return;
+    }
+
+    try {
+      const audioBuffer = Buffer.from(audioBase64, 'base64');
+      if (!audioBuffer.length) {
+        sendJson(res, 400, { error: 'Decoded audio content is empty.' });
+        return;
+      }
+
+      const extension = getAudioFileExtension(mimeType);
+      const blob = new Blob([audioBuffer], { type: mimeType || 'audio/webm' });
+      const formData = new FormData();
+      formData.append('file', blob, `recording.${extension}`);
+      formData.append('model', OPENAI_TRANSCRIBE_MODEL);
+
+      const apiRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+        },
+        body: formData,
+      });
+
+      if (!apiRes.ok) {
+        const details = await apiRes.text();
+        console.error('OpenAI transcription request failed:', apiRes.status, details);
+        sendJson(res, 502, { error: 'OpenAI transcription request failed.', details });
+        return;
+      }
+
+      const responseJson = await apiRes.json();
+      const transcript =
+        typeof responseJson?.text === 'string'
+          ? responseJson.text.trim()
+          : typeof responseJson?.transcript === 'string'
+            ? responseJson.transcript.trim()
+            : '';
+
+      sendJson(res, 200, {
+        transcript: transcript || '',
+      });
+    } catch (error) {
+      console.error('Unexpected transcription server error:', error);
+      sendJson(res, 500, {
+        error: 'Unexpected transcription server error.',
+        details: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+}
+
 const server = http.createServer((req, res) => {
   if (req.method === 'OPTIONS') {
     sendJson(res, 204, {});
@@ -313,6 +400,22 @@ const server = http.createServer((req, res) => {
       return;
     }
     handleCategorize(req, res);
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/transcribe') {
+    const ip = getClientIp(req);
+    const limitResult = checkRateLimit(ip);
+    if (!limitResult.allowed) {
+      sendJson(
+        res,
+        429,
+        { error: 'Rate limit exceeded. Maximum 10 requests per minute per IP.' },
+        { 'Retry-After': String(limitResult.retryAfterSec) }
+      );
+      return;
+    }
+    handleTranscribe(req, res);
     return;
   }
 
