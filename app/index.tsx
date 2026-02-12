@@ -6,8 +6,15 @@ import { HiNewspaper } from 'react-icons/hi';
 
 export default function HomeScreen() {
   const openURL = (url: string) => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
     Linking.openURL(url);
   };
+
+  const handleRedditPress = () => openURL('https://www.reddit.com');
+  const handleWsjPress = () => openURL('https://www.wsj.com');
 
   return (
     <View style={styles.container}>
@@ -29,7 +36,7 @@ export default function HomeScreen() {
         <View style={styles.iconsContainer}>
           <TouchableOpacity
             style={styles.iconButton}
-            onPress={() => openURL('https://www.reddit.com')}
+            onPress={handleRedditPress}
           >
             <FaRedditAlien size={40} color="#FF4500" />
             <Text style={styles.iconLabel}>Reddit</Text>
@@ -37,7 +44,7 @@ export default function HomeScreen() {
 
           <TouchableOpacity
             style={styles.iconButton}
-            onPress={() => openURL('https://www.wsj.com')}
+            onPress={handleWsjPress}
           >
             <HiNewspaper size={40} color="#000" />
             <Text style={styles.iconLabel}>WSJ</Text>
