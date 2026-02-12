@@ -7,7 +7,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "build:web": "expo export --platform web && cp 404.html dist/404.html",
+    "build:web": "expo export --platform web && node fix-paths.js && cp 404.html dist/404.html",
     "predeploy": "npm run build:web",
     "deploy": "gh-pages -d dist"
   },
