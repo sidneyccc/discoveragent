@@ -1,30 +1,124 @@
 import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking, ScrollView, TextInput } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { FaHackerNews, FaRedditAlien, FaStackOverflow, FaWikipediaW } from 'react-icons/fa';
+import { FaHackerNews, FaMicrophone, FaRedditAlien, FaStackOverflow, FaStop, FaWikipediaW } from 'react-icons/fa';
 import { HiNewspaper } from 'react-icons/hi';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
-type Source = {
-  name: string;
-  url: string;
-  icon: JSX.Element;
-};
+function renderInlineBold(line: string) {
+  const parts = line.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, idx) => {
+    const isBold = part.startsWith('**') && part.endsWith('**') && part.length > 4;
+    if (isBold) {
+      return (
+        <Text key={`bold-${idx}`} style={styles.richTextBold}>
+          {part.slice(2, -2)}
+        </Text>
+      );
+    }
+    return <Text key={`txt-${idx}`}>{part}</Text>;
+  });
+}
+
+function renderRichText(text: string) {
+  const lines = text.split('\n');
+  return (
+    <View style={styles.richTextContainer}>
+      {lines.map((line, idx) => {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          return <View key={`sp-${idx}`} style={styles.richTextSpacer} />;
+        }
+
+        if (trimmed === '---') {
+          return <View key={`hr-${idx}`} style={styles.richTextDivider} />;
+        }
+
+        if (trimmed.startsWith('#### ')) {
+          return (
+            <Text key={`h4-${idx}`} style={styles.richTextH4}>
+              {renderInlineBold(trimmed.slice(5))}
+            </Text>
+          );
+        }
+
+        if (trimmed.startsWith('### ')) {
+          return (
+            <Text key={`h3-${idx}`} style={styles.richTextH3}>
+              {renderInlineBold(trimmed.slice(4))}
+            </Text>
+          );
+        }
+
+        if (trimmed.startsWith('- ')) {
+          return (
+            <View key={`b-${idx}`} style={styles.richTextBulletRow}>
+              <Text style={styles.richTextBullet}>•</Text>
+              <Text style={styles.richTextBulletText}>{renderInlineBold(trimmed.slice(2))}</Text>
+            </View>
+          );
+        }
+
+        const numberedMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+        if (numberedMatch) {
+          return (
+            <View key={`n-${idx}`} style={styles.richTextBulletRow}>
+              <Text style={styles.richTextNumber}>{numberedMatch[1]}.</Text>
+              <Text style={styles.richTextBulletText}>{renderInlineBold(numberedMatch[2])}</Text>
+            </View>
+          );
+        }
+
+        return (
+          <Text key={`p-${idx}`} style={styles.richTextParagraph}>
+            {renderInlineBold(line)}
+          </Text>
+        );
+      })}
+    </View>
+  );
+}
+
+const DEFAULT_SELECTED_SOURCES = [
+  'Reuters',
+  'AP News',
+  'BBC',
+  'NPR',
+  'Hacker News',
+  'Reddit',
+  'Stack Overflow',
+  'Wikipedia',
+];
 
 export default function HomeScreen() {
+  const envApiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
+  const hasPlaceholderApiBaseUrl =
+    envApiBaseUrl.includes('<your-vercel-project>') || envApiBaseUrl.includes('your-vercel-project');
+  const isLocalWebHost =
+    Platform.OS === 'web' &&
+    typeof window !== 'undefined' &&
+    ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+  const localApiBaseUrl = 'http://127.0.0.1:3001';
   const defaultApiBaseUrl =
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
     window.location.hostname.endsWith('github.io')
       ? 'https://discoveragent.vercel.app'
-      : 'http://127.0.0.1:3001';
-  const apiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || defaultApiBaseUrl).replace(/\/$/, '');
+      : localApiBaseUrl;
+  const apiBaseUrl = (
+    isLocalWebHost
+      ? localApiBaseUrl
+      : hasPlaceholderApiBaseUrl || !envApiBaseUrl
+        ? defaultApiBaseUrl
+        : envApiBaseUrl
+  ).replace(/\/$/, '');
 
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
-  const [hasAsked, setHasAsked] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [answer, setAnswer] = useState('');
-  const [answerError, setAnswerError] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const [categorizedResult, setCategorizedResult] = useState('');
+  const [categorizeError, setCategorizeError] = useState('');
+  const recognitionRef = useRef<any>(null);
 
   const openURL = (url: string) => {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -34,7 +128,7 @@ export default function HomeScreen() {
     Linking.openURL(url);
   };
 
-  const sources: Source[] = [
+  const sources = [
     { name: 'Reuters', url: 'https://www.reuters.com', icon: <HiNewspaper size={32} color="#111" /> },
     { name: 'AP News', url: 'https://apnews.com', icon: <HiNewspaper size={32} color="#111" /> },
     { name: 'BBC', url: 'https://www.bbc.com/news', icon: <HiNewspaper size={32} color="#111" /> },
@@ -45,37 +139,93 @@ export default function HomeScreen() {
     { name: 'Wikipedia', url: 'https://www.wikipedia.org', icon: <FaWikipediaW size={32} color="#111" /> },
   ];
 
-  const handleAsk = async () => {
+  const canUseVoiceInput =
+    Platform.OS === 'web' &&
+    typeof window !== 'undefined' &&
+    !!((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
+
+  const handleVoiceInput = () => {
+    if (!canUseVoiceInput || typeof window === 'undefined') return;
+
+    const SpeechRecognitionCtor =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) return;
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch {
+        // no-op
+      }
+      recognitionRef.current = null;
+      setIsListening(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.continuous = false;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event?.results?.[0]?.[0]?.transcript?.trim();
+      if (transcript) {
+        setQuestion(transcript);
+      }
+    };
+
+    recognition.onerror = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
+
+    recognitionRef.current = recognition;
+    recognition.start();
+  };
+
+  const handleCategorize = async () => {
     const trimmed = question.trim();
     if (!trimmed) return;
 
-    setHasAsked(true);
     setSubmittedQuestion(trimmed);
     setIsLoading(true);
-    setAnswer('');
-    setAnswerError('');
+    setCategorizedResult('');
+    setCategorizeError('');
 
     try {
-      const res = await fetch(`${apiBaseUrl}/api/ask`, {
+      const res = await fetch(`${apiBaseUrl}/api/categorize`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ question: trimmed }),
+        body: JSON.stringify({
+          question: trimmed,
+          selectedSources: DEFAULT_SELECTED_SOURCES,
+        }),
       });
 
       const data = await res.json();
-
       if (!res.ok) {
-        const message = typeof data?.error === 'string' ? data.error : 'Failed to fetch answer.';
+        const message = typeof data?.error === 'string' ? data.error : 'Failed to categorize response.';
         const details = typeof data?.details === 'string' ? data.details : '';
-        setAnswerError(details ? `${message} ${details}` : message);
+        setCategorizeError(details ? `${message} ${details}` : message);
         return;
       }
 
-      setAnswer(typeof data?.answer === 'string' ? data.answer : 'No answer text returned.');
+      setCategorizedResult(
+        typeof data?.categorized === 'string' ? data.categorized : 'No categorized output returned.'
+      );
     } catch {
-      setAnswerError(`Could not connect to API server at ${apiBaseUrl}.`);
+      setCategorizeError(`Could not connect to API server at ${apiBaseUrl}.`);
     } finally {
       setIsLoading(false);
     }
@@ -94,7 +244,7 @@ export default function HomeScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Ask a Question</Text>
           <Text style={styles.cardText}>
-            Enter a question to prepare a cross-source summary from trusted outlets.
+            Enter a question to directly generate a source-categorized summary from trusted outlets.
           </Text>
           <TextInput
             style={styles.input}
@@ -104,33 +254,41 @@ export default function HomeScreen() {
             onChangeText={setQuestion}
             multiline
           />
-          <TouchableOpacity style={styles.askButton} onPress={handleAsk}>
-            <Text style={styles.askButtonText}>Ask</Text>
-          </TouchableOpacity>
+          <View style={styles.actionsRow}>
+            <TouchableOpacity style={styles.askButton} onPress={handleCategorize}>
+              <Text style={styles.askButtonText}>Categorize Opinions</Text>
+            </TouchableOpacity>
+            {canUseVoiceInput ? (
+              <TouchableOpacity
+                style={[styles.micIconButton, isListening ? styles.micIconButtonActive : styles.micIconButtonIdle]}
+                onPress={handleVoiceInput}
+              >
+                {isListening ? (
+                  <FaStop size={14} color="#fff" />
+                ) : (
+                  <FaMicrophone size={16} color="#0f172a" />
+                )}
+              </TouchableOpacity>
+            ) : null}
+          </View>
+
           {submittedQuestion ? (
             <Text style={styles.statusText}>
               Submitted: "{submittedQuestion}"
             </Text>
           ) : null}
-          {hasAsked ? (
+
+          {isLoading || categorizeError || categorizedResult ? (
             <View style={styles.answerFrame}>
-              <Text style={styles.answerFrameTitle}>ChatGPT Response</Text>
               {isLoading ? (
-                <Text style={styles.answerFrameText}>Thinking...</Text>
-              ) : answerError ? (
-                <Text style={styles.answerFrameError}>{answerError}</Text>
+                <Text style={styles.answerFrameText}>Categorizing...</Text>
+              ) : categorizeError ? (
+                <Text style={styles.answerFrameError}>{categorizeError}</Text>
               ) : (
-                <Text style={styles.answerFrameText}>{answer}</Text>
+                renderRichText(categorizedResult)
               )}
             </View>
           ) : null}
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Trusted Sources</Text>
-          <Text style={styles.cardText}>
-            Quick links to reputable news outlets and high-signal discussion communities.
-          </Text>
         </View>
 
         <View style={styles.iconsContainer}>
@@ -145,6 +303,7 @@ export default function HomeScreen() {
             </TouchableOpacity>
           ))}
         </View>
+
       </View>
     </ScrollView>
   );
@@ -212,16 +371,38 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   askButton: {
-    marginTop: 12,
     backgroundColor: '#007AFF',
     borderRadius: 8,
-    paddingVertical: 10,
+    height: 42,
     alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
   },
   askButtonText: {
     color: '#fff',
     fontWeight: '600',
     fontSize: 14,
+  },
+  actionsRow: {
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  micIconButton: {
+    borderRadius: 8,
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  micIconButtonIdle: {
+    backgroundColor: '#eef2ff',
+    borderColor: '#c7d2fe',
+  },
+  micIconButtonActive: {
+    backgroundColor: '#dc2626',
+    borderColor: '#dc2626',
   },
   statusText: {
     marginTop: 10,
@@ -236,12 +417,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#fcfcfc',
     padding: 12,
   },
-  answerFrameTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#222',
-    marginBottom: 6,
-  },
   answerFrameText: {
     fontSize: 14,
     color: '#333',
@@ -250,6 +425,66 @@ const styles = StyleSheet.create({
   answerFrameError: {
     fontSize: 14,
     color: '#b42318',
+    lineHeight: 20,
+  },
+  richTextBold: {
+    fontWeight: '700',
+    color: '#111827',
+  },
+  richTextContainer: {
+    gap: 2,
+  },
+  richTextSpacer: {
+    height: 6,
+  },
+  richTextDivider: {
+    marginTop: 8,
+    marginBottom: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+  },
+  richTextH3: {
+    marginTop: 8,
+    marginBottom: 4,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  richTextH4: {
+    marginTop: 6,
+    marginBottom: 2,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e293b',
+  },
+  richTextParagraph: {
+    fontSize: 14,
+    color: '#333',
+    lineHeight: 20,
+  },
+  richTextBulletRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 2,
+  },
+  richTextBullet: {
+    width: 14,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#334155',
+    fontWeight: '700',
+  },
+  richTextNumber: {
+    width: 24,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#334155',
+    fontWeight: '700',
+  },
+  richTextBulletText: {
+    flex: 1,
+    fontSize: 14,
+    color: '#333',
     lineHeight: 20,
   },
   iconsContainer: {
