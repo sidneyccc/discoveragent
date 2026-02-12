@@ -1,7 +1,8 @@
-import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking, ScrollView, TextInput } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { FaHackerNews, FaRedditAlien, FaStackOverflow, FaWikipediaW } from 'react-icons/fa';
 import { HiNewspaper } from 'react-icons/hi';
+import { useState } from 'react';
 
 type Source = {
   name: string;
@@ -10,6 +11,13 @@ type Source = {
 };
 
 export default function HomeScreen() {
+  const [question, setQuestion] = useState('');
+  const [submittedQuestion, setSubmittedQuestion] = useState('');
+  const [hasAsked, setHasAsked] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [answer, setAnswer] = useState('');
+  const [answerError, setAnswerError] = useState('');
+
   const openURL = (url: string) => {
     if (Platform.OS === 'web' && typeof window !== 'undefined') {
       window.open(url, '_blank', 'noopener,noreferrer');
@@ -29,6 +37,42 @@ export default function HomeScreen() {
     { name: 'Wikipedia', url: 'https://www.wikipedia.org', icon: <FaWikipediaW size={32} color="#111" /> },
   ];
 
+  const handleAsk = async () => {
+    const trimmed = question.trim();
+    if (!trimmed) return;
+
+    setHasAsked(true);
+    setSubmittedQuestion(trimmed);
+    setIsLoading(true);
+    setAnswer('');
+    setAnswerError('');
+
+    try {
+      const res = await fetch('http://127.0.0.1:3001/api/ask', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ question: trimmed }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        const message = typeof data?.error === 'string' ? data.error : 'Failed to fetch answer.';
+        const details = typeof data?.details === 'string' ? data.details : '';
+        setAnswerError(details ? `${message} ${details}` : message);
+        return;
+      }
+
+      setAnswer(typeof data?.answer === 'string' ? data.answer : 'No answer text returned.');
+    } catch {
+      setAnswerError('Could not connect to API server on 127.0.0.1:3001.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <StatusBar style="auto" />
@@ -38,6 +82,41 @@ export default function HomeScreen() {
         <Text style={styles.subtitle}>
           Running on {Platform.OS === 'web' ? 'Web' : 'iOS'}
         </Text>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Ask a Question</Text>
+          <Text style={styles.cardText}>
+            Enter a question to prepare a cross-source summary from trusted outlets.
+          </Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Example: What are the pros and cons of AI regulation right now?"
+            placeholderTextColor="#888"
+            value={question}
+            onChangeText={setQuestion}
+            multiline
+          />
+          <TouchableOpacity style={styles.askButton} onPress={handleAsk}>
+            <Text style={styles.askButtonText}>Ask</Text>
+          </TouchableOpacity>
+          {submittedQuestion ? (
+            <Text style={styles.statusText}>
+              Submitted: "{submittedQuestion}"
+            </Text>
+          ) : null}
+          {hasAsked ? (
+            <View style={styles.answerFrame}>
+              <Text style={styles.answerFrameTitle}>ChatGPT Response</Text>
+              {isLoading ? (
+                <Text style={styles.answerFrameText}>Thinking...</Text>
+              ) : answerError ? (
+                <Text style={styles.answerFrameError}>{answerError}</Text>
+              ) : (
+                <Text style={styles.answerFrameText}>{answer}</Text>
+              )}
+            </View>
+          ) : null}
+        </View>
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Trusted Sources</Text>
@@ -110,6 +189,59 @@ const styles = StyleSheet.create({
   cardText: {
     fontSize: 14,
     color: '#666',
+    lineHeight: 20,
+  },
+  input: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#333',
+    backgroundColor: '#fafafa',
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  askButton: {
+    marginTop: 12,
+    backgroundColor: '#007AFF',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  askButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  statusText: {
+    marginTop: 10,
+    color: '#444',
+    fontSize: 13,
+  },
+  answerFrame: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: '#d6d6d6',
+    borderRadius: 8,
+    backgroundColor: '#fcfcfc',
+    padding: 12,
+  },
+  answerFrameTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#222',
+    marginBottom: 6,
+  },
+  answerFrameText: {
+    fontSize: 14,
+    color: '#333',
+    lineHeight: 20,
+  },
+  answerFrameError: {
+    fontSize: 14,
+    color: '#b42318',
     lineHeight: 20,
   },
   iconsContainer: {

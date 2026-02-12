@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
+    "api": "node --env-file=.env backend/server.js",
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
