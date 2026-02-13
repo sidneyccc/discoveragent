@@ -1,5 +1,5 @@
 const http = require('http');
-const { ApiError, ask, categorize, transcribe, enforceRateLimit, getClientIpFromReq } = require('./api-core');
+const { ApiError, ask, categorize, summarizeSource, summarizeAndClusterSources, categorizeSourceSummaries, transcribe, enforceRateLimit, getClientIpFromReq } = require('./api-core');
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3001);
@@ -91,6 +91,37 @@ const server = http.createServer((req, res) => {
       transcribe({
         audioBase64: body.audioBase64,
         mimeType: body.mimeType,
+      })
+    );
+    return;
+  }
+
+
+  if (req.method === 'POST' && req.url === '/api/source-clusters') {
+    handleApiRequest(req, res, (body) =>
+      summarizeAndClusterSources({
+        sources: body.sources,
+        preferredLanguage: body.preferredLanguage,
+      })
+    );
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/api/source-summary') {
+    handleApiRequest(req, res, (body) =>
+      summarizeSource({
+        sourceName: body.sourceName,
+        sourceUrl: body.sourceUrl,
+        preferredLanguage: body.preferredLanguage,
+      })
+    );
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/source-categorize') {
+    handleApiRequest(req, res, (body) =>
+      categorizeSourceSummaries({
+        sourceSummaries: body.sourceSummaries,
+        preferredLanguage: body.preferredLanguage,
       })
     );
     return;

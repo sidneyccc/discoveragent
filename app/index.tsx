@@ -1,6 +1,6 @@
-import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking, ScrollView, TextInput, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, ScrollView, TextInput, Animated, Easing, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { FaMicrophone, FaStop, FaTv } from 'react-icons/fa';
+import { FaMicrophone, FaStop, FaTv, FaRegCompass } from 'react-icons/fa';
 import { SiCnn, SiNeteasecloudmusic, SiReddit, SiSinaweibo, SiStackoverflow, SiWikipedia, SiYcombinator } from 'react-icons/si';
 import { useEffect, useRef, useState } from 'react';
 
@@ -110,11 +110,12 @@ export default function HomeScreen() {
     typeof window !== 'undefined' &&
     ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
   const localApiBaseUrl = 'http://127.0.0.1:3001';
+  const hostedApiBaseUrl = 'https://discoveragent.vercel.app';
   const defaultApiBaseUrl =
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
     window.location.hostname.endsWith('github.io')
-      ? 'https://discoveragent.vercel.app'
+      ? hostedApiBaseUrl
       : localApiBaseUrl;
   const apiBaseUrl = (
     isLocalWebHost
@@ -123,6 +124,13 @@ export default function HomeScreen() {
         ? defaultApiBaseUrl
         : envApiBaseUrl
   ).replace(/\/$/, '');
+  const preferredLanguage =
+    Platform.OS === 'web' &&
+    typeof navigator !== 'undefined' &&
+    typeof navigator.language === 'string' &&
+    navigator.language
+      ? navigator.language
+      : 'en-US';
 
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
@@ -132,9 +140,27 @@ export default function HomeScreen() {
   const [voiceError, setVoiceError] = useState('');
   const [categorizedResult, setCategorizedResult] = useState('');
   const [categorizeError, setCategorizeError] = useState('');
+  const [isAllSourcesLoading, setIsAllSourcesLoading] = useState(false);
+  const [isSourceCategorizing, setIsSourceCategorizing] = useState(false);
+  const [allSourcesError, setAllSourcesError] = useState('');
+  const [sourceCategorizeError, setSourceCategorizeError] = useState('');
+  const [allSourceSummaries, setAllSourceSummaries] = useState<Array<{
+    name: string;
+    url: string;
+    summary: string;
+    error: string;
+  }>>([]);
+  const [clusteredSourcesResult, setClusteredSourcesResult] = useState('');
+  const [clusteredSourcesMeta, setClusteredSourcesMeta] = useState('');
+  const [sourceViewportWidth, setSourceViewportWidth] = useState(0);
+  const [sourceContentWidth, setSourceContentWidth] = useState(0);
+  const [isSourceListInteracting, setIsSourceListInteracting] = useState(false);
   const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<any>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const sourceScrollRef = useRef<ScrollView | null>(null);
+  const sourceAutoScrollOffsetRef = useRef(0);
+  const sourceInteractionTimeoutRef = useRef<any>(null);
   const waveFlow = useRef(new Animated.Value(0)).current;
   const waveSwell = useRef(new Animated.Value(0)).current;
   const waveDrift = useRef(new Animated.Value(0)).current;
@@ -201,6 +227,43 @@ export default function HomeScreen() {
       driftAnim.stop();
     };
   }, [waveDrift, waveFlow, waveSwell]);
+
+  useEffect(() => {
+    if (sourceContentWidth <= sourceViewportWidth + 8) return;
+
+    const interval = setInterval(() => {
+      if (isSourceListInteracting) return;
+
+      const maxOffset = Math.max(0, sourceContentWidth - sourceViewportWidth);
+      let nextOffset = sourceAutoScrollOffsetRef.current + 0.35;
+      if (nextOffset > maxOffset) {
+        nextOffset = 0;
+      }
+
+      sourceAutoScrollOffsetRef.current = nextOffset;
+      sourceScrollRef.current?.scrollTo({ x: nextOffset, animated: false });
+    }, 32);
+
+    return () => clearInterval(interval);
+  }, [isSourceListInteracting, sourceContentWidth, sourceViewportWidth]);
+
+  useEffect(() => {
+    return () => {
+      if (sourceInteractionTimeoutRef.current) {
+        clearTimeout(sourceInteractionTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const markSourceListInteraction = () => {
+    setIsSourceListInteracting(true);
+    if (sourceInteractionTimeoutRef.current) {
+      clearTimeout(sourceInteractionTimeoutRef.current);
+    }
+    sourceInteractionTimeoutRef.current = setTimeout(() => {
+      setIsSourceListInteracting(false);
+    }, 1400);
+  };
 
   const bubbleOneStyle = {
     transform: [
@@ -281,14 +344,6 @@ export default function HomeScreen() {
     const trimmed = newText.trim();
     if (!trimmed) return;
     setQuestion((prev) => (prev.trim() ? `${prev.trim()} ${trimmed}` : trimmed));
-  };
-
-  const openURL = (url: string) => {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.open(url, '_blank', 'noopener,noreferrer');
-      return;
-    }
-    Linking.openURL(url);
   };
 
   const sources = [
@@ -478,7 +533,7 @@ export default function HomeScreen() {
     }
 
     const recognition = new SpeechRecognitionCtor();
-    recognition.lang = 'en-US';
+    recognition.lang = preferredLanguage || 'en-US';
     recognition.interimResults = false;
     recognition.continuous = false;
     recognition.maxAlternatives = 1;
@@ -568,6 +623,176 @@ export default function HomeScreen() {
     }
   };
 
+  const requestSourceSummary = async (source: { name: string; url: string }) => {
+    let res: Response;
+    try {
+      res = await fetch(`${apiBaseUrl}/api/source-summary`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sourceName: source.name,
+          sourceUrl: source.url,
+          preferredLanguage,
+        }),
+      });
+    } catch {
+      if (apiBaseUrl === localApiBaseUrl) {
+        res = await fetch(`${hostedApiBaseUrl}/api/source-summary`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sourceName: source.name,
+            sourceUrl: source.url,
+            preferredLanguage,
+          }),
+        });
+      } else {
+        throw new Error('primary-source-summary-fetch-failed');
+      }
+    }
+
+    if (!res.ok && apiBaseUrl === localApiBaseUrl) {
+      try {
+        res = await fetch(`${hostedApiBaseUrl}/api/source-summary`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sourceName: source.name,
+            sourceUrl: source.url,
+            preferredLanguage,
+          }),
+        });
+      } catch {
+        // keep original failure handling below
+      }
+    }
+
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to summarize source.');
+    }
+    return typeof data?.summary === 'string' && data.summary.trim() ? data.summary.trim() : 'No summary returned.';
+  };
+
+  const handleSummarizeAllSources = async () => {
+    setIsAllSourcesLoading(true);
+    setAllSourcesError('');
+    setSourceCategorizeError('');
+    setAllSourceSummaries([]);
+    setClusteredSourcesResult('');
+    setClusteredSourcesMeta('');
+
+    try {
+      const settled = await Promise.allSettled(
+        sources.map(async (source) => {
+          try {
+            const summary = await requestSourceSummary(source);
+            return { name: source.name, url: source.url, summary, error: '' };
+          } catch (error) {
+            return {
+              name: source.name,
+              url: source.url,
+              summary: '',
+              error: error instanceof Error ? error.message : 'Failed to summarize source.',
+            };
+          }
+        })
+      );
+
+      const normalized = settled.map((item, idx) =>
+        item.status === 'fulfilled'
+          ? item.value
+          : {
+              name: sources[idx].name,
+              url: sources[idx].url,
+              summary: '',
+              error: 'Failed to summarize source.',
+            }
+      );
+
+      setAllSourceSummaries(normalized);
+      const failedCount = normalized.filter((s) => s.error).length;
+      setClusteredSourcesMeta(
+        failedCount > 0
+          ? `Fetched summaries for ${normalized.length - failedCount}/${normalized.length} sources.`
+          : `Fetched summaries for ${normalized.length} sources.`
+      );
+      await handleCategorizeFetchedSources(normalized);
+    } catch {
+      setAllSourcesError(`Could not connect to API server at ${apiBaseUrl}.`);
+    } finally {
+      setIsAllSourcesLoading(false);
+    }
+  };
+
+  const handleCategorizeFetchedSources = async (
+    sourceSummariesInput?: Array<{ name: string; url: string; summary: string; error: string }>
+  ) => {
+    const successful = (sourceSummariesInput || allSourceSummaries).filter((s) => !s.error && s.summary.trim());
+    if (!successful.length) {
+      setSourceCategorizeError('No successful source summaries to categorize.');
+      return;
+    }
+
+    setIsSourceCategorizing(true);
+    setSourceCategorizeError('');
+    setClusteredSourcesResult('');
+
+    try {
+      let res: Response;
+      try {
+        res = await fetch(`${apiBaseUrl}/api/source-categorize`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sourceSummaries: successful.map((s) => ({ name: s.name, url: s.url, summary: s.summary })),
+            preferredLanguage,
+          }),
+        });
+      } catch {
+        if (apiBaseUrl === localApiBaseUrl) {
+          res = await fetch(`${hostedApiBaseUrl}/api/source-categorize`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              sourceSummaries: successful.map((s) => ({ name: s.name, url: s.url, summary: s.summary })),
+              preferredLanguage,
+            }),
+          });
+        } else {
+          throw new Error('source-categorize-fetch-failed');
+        }
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        const message = typeof data?.error === 'string' ? data.error : 'Failed to categorize summaries.';
+        setSourceCategorizeError(message);
+        return;
+      }
+
+      setClusteredSourcesResult(
+        typeof data?.clustered === 'string' && data.clustered.trim()
+          ? data.clustered.trim()
+          : 'No clustered output returned.'
+      );
+    } catch {
+      setSourceCategorizeError(`Could not connect to API server at ${apiBaseUrl}.`);
+    } finally {
+      setIsSourceCategorizing(false);
+    }
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <StatusBar style="auto" />
@@ -602,7 +827,7 @@ export default function HomeScreen() {
           />
           <View style={styles.actionsRow}>
             <TouchableOpacity style={styles.askButton} onPress={handleCategorize}>
-              <Text style={styles.askButtonText}>Categorize Opinions</Text>
+              <Text style={styles.askButtonText}>Analyze Perspectives</Text>
             </TouchableOpacity>
             {canUseVoiceInput ? (
               <TouchableOpacity
@@ -642,19 +867,97 @@ export default function HomeScreen() {
           ) : null}
         </View>
 
-        <View style={styles.iconsContainer}>
-          {sources.map((source) => (
-            <TouchableOpacity
-              key={source.name}
-              style={styles.iconButton}
-              onPress={() => openURL(source.url)}
-            >
-              {source.icon}
-              <Text style={styles.iconLabel}>{source.name}</Text>
-            </TouchableOpacity>
-          ))}
+        <View style={styles.iconsSection}>
+          <ScrollView
+            ref={sourceScrollRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.iconsContainer}
+            onLayout={(event) => setSourceViewportWidth(event.nativeEvent.layout.width)}
+            onContentSizeChange={(width) => setSourceContentWidth(width)}
+            onScroll={(event) => {
+              sourceAutoScrollOffsetRef.current = event.nativeEvent.contentOffset.x;
+            }}
+            onScrollBeginDrag={markSourceListInteraction}
+            onScrollEndDrag={markSourceListInteraction}
+            onMomentumScrollEnd={markSourceListInteraction}
+            scrollEventThrottle={16}
+          >
+            {sources.map((source) => (
+              <View
+                key={source.name}
+                style={styles.iconButton}
+              >
+                {source.icon}
+                <Text style={styles.iconLabel}>{source.name}</Text>
+              </View>
+            ))}
+          </ScrollView>
         </View>
 
+        <View style={styles.bulkActionWrap}>
+          <TouchableOpacity
+            style={[styles.bulkActionButton, isAllSourcesLoading ? styles.bulkActionButtonDisabled : null]}
+            onPress={handleSummarizeAllSources}
+            disabled={isAllSourcesLoading}
+          >
+            <View style={styles.bulkActionButtonRow}>
+              <FaRegCompass size={14} color="#fff" />
+              <Text style={styles.bulkActionButtonText}>
+                {isAllSourcesLoading ? 'Gathering Latest Source Highlights...' : 'Discover Latest Highlights'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {isAllSourcesLoading ? (
+          <View style={styles.bulkLoadingWrap}>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.bulkLoadingText}>Fetching sources in parallel and summarizing each source...</Text>
+          </View>
+        ) : null}
+
+        {allSourcesError ? <Text style={styles.bulkErrorText}>{allSourcesError}</Text> : null}
+
+        {clusteredSourcesMeta ? <Text style={styles.bulkMetaText}>{clusteredSourcesMeta}</Text> : null}
+
+        {allSourceSummaries.length > 0 ? (
+          <View style={styles.bulkSummaryList}>
+            {allSourceSummaries.map((item) => (
+              <View key={item.name} style={styles.bulkSummaryCard}>
+                <Text style={styles.bulkSummaryTitle}>{item.name}</Text>
+                <Text style={styles.bulkSummaryUrl}>{item.url}</Text>
+                <View style={styles.bulkSummaryBody}>
+                  {item.error ? (
+                    <Text style={styles.bulkSummaryError}>{item.error}</Text>
+                  ) : (
+                    renderRichText(item.summary)
+                  )}
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {isSourceCategorizing ? (
+          <View style={styles.bulkLoadingWrap}>
+            <ActivityIndicator size="small" color="#2563eb" />
+            <Text style={styles.bulkLoadingText}>Organizing shared narratives by source coverage...</Text>
+          </View>
+        ) : null}
+
+        {sourceCategorizeError ? <Text style={styles.bulkErrorText}>{sourceCategorizeError}</Text> : null}
+
+        {clusteredSourcesResult ? (
+          <View style={styles.bulkSummaryList}>
+            <View style={styles.bulkSummaryCard}>
+              <Text style={styles.bulkSummaryTitle}>Ranked Source Clusters</Text>
+              <View style={styles.bulkSummaryBody}>
+                {renderRichText(clusteredSourcesResult)}
+              </View>
+            </View>
+          </View>
+        ) : null}
       </View>
     </ScrollView>
   );
@@ -939,29 +1242,30 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.2,
   },
+  iconsSection: {
+    width: '100%',
+    maxWidth: 760,
+    marginTop: 20,
+  },
   iconsContainer: {
     flexDirection: 'row',
-    justifyContent: 'center',
-    flexWrap: 'wrap',
     gap: 10,
-    marginTop: 20,
-    width: '100%',
-    maxWidth: 640,
+    paddingHorizontal: 2,
+    paddingVertical: 2,
   },
   iconButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
     backgroundColor: '#fff',
-    borderRadius: 18,
+    borderRadius: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.08,
     shadowRadius: 12,
     elevation: 3,
-    minWidth: 100,
-    flexBasis: '31%',
+    minWidth: 94,
     borderWidth: 1,
     borderColor: '#eceff3',
   },
@@ -971,5 +1275,97 @@ const styles = StyleSheet.create({
     color: '#374151',
     fontWeight: '500',
     textAlign: 'center',
+  },
+  bulkActionWrap: {
+    width: '100%',
+    maxWidth: 640,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  bulkActionButton: {
+    backgroundColor: '#2563eb',
+    borderRadius: 12,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bulkActionButtonDisabled: {
+    backgroundColor: '#93c5fd',
+  },
+  bulkActionButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  bulkActionButtonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bulkLoadingWrap: {
+    width: '100%',
+    maxWidth: 640,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+  },
+  bulkLoadingText: {
+    fontSize: 13,
+    color: '#334155',
+  },
+  bulkErrorText: {
+    width: '100%',
+    maxWidth: 640,
+    marginTop: 8,
+    fontSize: 13,
+    color: '#b42318',
+  },
+  bulkMetaText: {
+    width: '100%',
+    maxWidth: 760,
+    marginTop: 10,
+    fontSize: 12,
+    color: '#64748b',
+  },
+  bulkSummaryList: {
+    width: '100%',
+    maxWidth: 760,
+    marginTop: 12,
+    gap: 10,
+  },
+  bulkSummaryCard: {
+    width: '100%',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    padding: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  bulkSummaryTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  bulkSummaryUrl: {
+    fontSize: 11,
+    color: '#64748b',
+    marginBottom: 8,
+  },
+  bulkSummaryBody: {
+    borderTopColor: '#e5e7eb',
+    borderTopWidth: 1,
+    paddingTop: 8,
+  },
+  bulkSummaryError: {
+    fontSize: 14,
+    color: '#b42318',
+    lineHeight: 22,
   },
 });

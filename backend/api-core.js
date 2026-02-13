@@ -137,6 +137,77 @@ function ensureApiKey() {
   }
 }
 
+function normalizePreferredLanguage(preferredLanguage) {
+  const normalized = String(preferredLanguage || '').trim();
+  if (!normalized) return '';
+  return /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(normalized) ? normalized : '';
+}
+
+function stripHtmlToText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function fetchPageText(url) {
+  const normalizedUrl = String(url || '').trim();
+  if (!normalizedUrl) {
+    throw new ApiError(400, 'Source URL is required.');
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(normalizedUrl);
+  } catch {
+    throw new ApiError(400, 'Invalid source URL.');
+  }
+
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    throw new ApiError(400, 'Only HTTP/HTTPS URLs are supported.');
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(parsedUrl.toString(), {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; SidAgent/1.0; +https://example.com)',
+        Accept: 'text/html,application/xhtml+xml',
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      throw new ApiError(502, 'Failed to fetch source page.');
+    }
+
+    const html = await response.text();
+    const text = stripHtmlToText(html);
+    if (!text) {
+      throw new ApiError(502, 'Source page had no readable content.');
+    }
+
+    // Keep context bounded for latency/cost.
+    return text.slice(0, 16000);
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw new ApiError(502, 'Failed to fetch source page.');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function postResponsesApi(systemPrompt, userPrompt) {
   const apiRes = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
@@ -223,6 +294,184 @@ Please return:
   return { categorized: extractAnswer(responseJson) || 'No categorized output returned.' };
 }
 
+async function summarizeSource({ sourceName, sourceUrl, preferredLanguage }) {
+  const normalizedSourceName = String(sourceName || '').trim() || 'Source';
+  const normalizedSourceUrl = String(sourceUrl || '').trim();
+  const targetLanguage = normalizePreferredLanguage(preferredLanguage);
+
+  ensureApiKey();
+  const pageText = await fetchPageText(normalizedSourceUrl);
+
+  const userPrompt = `
+Source name: ${normalizedSourceName}
+Source URL: ${normalizedSourceUrl}
+Preferred output language: ${targetLanguage || 'same as user query language'}
+
+Visible page text snapshot:
+${pageText}
+
+Task:
+1) Summarize the latest important things visible on this source homepage snapshot.
+2) Prioritize concrete, recent, high-signal items (major events, announcements, policy changes, market-moving updates).
+3) Return 4-8 concise bullets.
+4) Add a final bullet called "Limits" noting this is from a homepage snapshot and may miss paywalled/section pages.
+5) Do not mention underlying model, vendor, or provider.
+6) If preferred language is provided, output in that language.
+`.trim();
+
+  const responseJson = await postResponsesApi(
+    'You are a precise news summarizer. Summarize only what is supported by the provided text. Avoid speculation.',
+    userPrompt
+  );
+
+  return {
+    summary: extractAnswer(responseJson) || 'No summary returned.',
+    sourceName: normalizedSourceName,
+    sourceUrl: normalizedSourceUrl,
+  };
+}
+
+async function summarizeAndClusterSources({ sources, preferredLanguage }) {
+  if (!Array.isArray(sources) || !sources.length) {
+    throw new ApiError(400, 'At least one source is required.');
+  }
+
+  ensureApiKey();
+  const targetLanguage = normalizePreferredLanguage(preferredLanguage);
+
+  const limitedSources = sources
+    .filter((s) => s && typeof s.name === 'string' && typeof s.url === 'string')
+    .slice(0, 20);
+
+  if (!limitedSources.length) {
+    throw new ApiError(400, 'No valid sources provided.');
+  }
+
+  const fetched = await Promise.allSettled(
+    limitedSources.map(async (source) => {
+      const sourceName = String(source.name).trim();
+      const sourceUrl = String(source.url).trim();
+      const text = await fetchPageText(sourceUrl);
+      return { sourceName, sourceUrl, text };
+    })
+  );
+
+  const successful = fetched
+    .filter((r) => r.status === 'fulfilled')
+    .map((r) => r.value);
+
+  const failed = fetched
+    .map((r, idx) => ({ r, idx }))
+    .filter(({ r }) => r.status === 'rejected')
+    .map(({ idx }) => `${limitedSources[idx].name} (${limitedSources[idx].url})`);
+
+  if (!successful.length) {
+    throw new ApiError(502, 'Failed to fetch source pages.');
+  }
+
+  const snapshots = successful
+    .map(
+      (s, idx) =>
+        `### Source ${idx + 1}: ${s.sourceName}\nURL: ${s.sourceUrl}\nSnapshot:\n${s.text.slice(0, 4000)}`
+    )
+    .join('\n\n');
+
+  const userPrompt = `
+Preferred output language: ${targetLanguage || 'same as user language'}
+
+You are given homepage snapshots from multiple sources. Summarize and cluster the latest important topics.
+
+Requirements:
+1) Output a ranked list of clustered items, ordered by coverage breadth (most sources mentioning the topic first).
+2) Cap the list to 20 items maximum.
+3) For each item include:
+   - Title
+   - Sources: comma-separated source names
+   - Source count: N
+   - 2-4 bullet points summarizing the key developments
+4) If a source disagrees materially with others, mention that in the item.
+5) Exclude trivial/low-signal topics.
+6) If preferred language is provided, output in that language.
+7) Do not mention underlying model, vendor, or provider.
+
+Source snapshots:
+${snapshots}
+`.trim();
+
+  const responseJson = await postResponsesApi(
+    'You are a senior news editor. Cluster overlapping stories and rank by cross-source mention count.',
+    userPrompt
+  );
+
+  return {
+    clustered: extractAnswer(responseJson) || 'No clustered output returned.',
+    sourceCount: successful.length,
+    failedSources: failed,
+  };
+}
+
+async function categorizeSourceSummaries({ sourceSummaries, preferredLanguage }) {
+  if (!Array.isArray(sourceSummaries) || !sourceSummaries.length) {
+    throw new ApiError(400, 'At least one source summary is required.');
+  }
+
+  ensureApiKey();
+  const targetLanguage = normalizePreferredLanguage(preferredLanguage);
+
+  const normalized = sourceSummaries
+    .filter((s) => s && typeof s.name === 'string' && typeof s.summary === 'string')
+    .map((s) => ({
+      name: String(s.name).trim(),
+      url: typeof s.url === 'string' ? String(s.url).trim() : '',
+      summary: String(s.summary).trim(),
+    }))
+    .filter((s) => s.name && s.summary)
+    .slice(0, 40);
+
+  if (!normalized.length) {
+    throw new ApiError(400, 'No valid source summaries provided.');
+  }
+
+  const payload = normalized
+    .map(
+      (s, idx) =>
+        `### Source ${idx + 1}: ${s.name}\nURL: ${s.url || 'N/A'}\nSummary:\n${s.summary.slice(0, 3000)}`
+    )
+    .join('\n\n');
+
+  const userPrompt = `
+Preferred output language: ${targetLanguage || 'same as user language'}
+
+You are given per-source summaries. Cluster and prioritize the shared stories.
+
+Requirements:
+1) Rank clustered items by coverage breadth (most sources mentioning first).
+2) Cap to 20 items maximum.
+3) For each item include:
+   - Title
+   - Sources: comma-separated source names
+   - Source count: N
+   - 2-4 concise bullet points
+4) Mention meaningful disagreement where present.
+5) Keep high-signal topics only.
+6) If preferred language is provided, output in that language.
+7) Do not mention underlying model, vendor, or provider.
+
+Per-source summaries:
+${payload}
+`.trim();
+
+  const responseJson = await postResponsesApi(
+    'You are a senior news editor. Cluster overlapping stories and rank by cross-source mention count.',
+    userPrompt
+  );
+
+  return {
+    clustered: extractAnswer(responseJson) || 'No clustered output returned.',
+    sourceCount: normalized.length,
+  };
+}
+
 async function transcribe({ audioBase64, mimeType }) {
   const normalizedAudioBase64 = String(audioBase64 || '').trim();
   const normalizedMimeType = String(mimeType || 'audio/webm').trim();
@@ -272,6 +521,9 @@ module.exports = {
   ApiError,
   ask,
   categorize,
+  summarizeSource,
+  summarizeAndClusterSources,
+  categorizeSourceSummaries,
   transcribe,
   enforceRateLimit,
   getClientIpFromReq,
