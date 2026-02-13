@@ -46,6 +46,7 @@ Instructions:
 - Keep output concise and structured with headings.
 - Use clear paragraph breaks. Do not return one long line.
 - Keep total output at or below 500 words.
+- Do not mention underlying model, vendor, or provider.
 - End with a short "Coverage Notes" section calling out where evidence is weak or inferred.
 `.trim();
 
@@ -132,7 +133,7 @@ function enforceRateLimit(ip) {
 
 function ensureApiKey() {
   if (!OPENAI_API_KEY) {
-    throw new ApiError(500, 'OPENAI_API_KEY is not set on the server.');
+    throw new ApiError(500, 'AI service is not configured.');
   }
 }
 
@@ -154,7 +155,7 @@ async function postResponsesApi(systemPrompt, userPrompt) {
 
   if (!apiRes.ok) {
     const details = await apiRes.text();
-    throw new ApiError(502, 'OpenAI request failed.', details);
+    throw new ApiError(502, 'AI service request failed.', details);
   }
 
   return apiRes.json();
@@ -168,7 +169,7 @@ async function ask(question) {
 
   ensureApiKey();
   const responseJson = await postResponsesApi(
-    'Answer clearly and concisely. Keep the answer practical.',
+    'Answer clearly and concisely. Keep the answer practical. Do not mention underlying model, vendor, or provider.',
     normalizedQuestion
   );
 
@@ -253,7 +254,7 @@ async function transcribe({ audioBase64, mimeType }) {
 
   if (!apiRes.ok) {
     const details = await apiRes.text();
-    throw new ApiError(502, 'OpenAI transcription request failed.', details);
+    throw new ApiError(502, 'AI transcription request failed.', details);
   }
 
   const responseJson = await apiRes.json();

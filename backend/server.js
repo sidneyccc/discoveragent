@@ -48,8 +48,10 @@ async function handleApiRequest(req, res, fn) {
   } catch (error) {
     if (error instanceof ApiError) {
       const headers = error.statusCode === 429 && error.details ? { 'Retry-After': error.details } : {};
-      const payload = error.details ? { error: error.message, details: error.details } : { error: error.message };
-      sendJson(res, error.statusCode, payload, headers);
+      if (error.statusCode !== 429 && error.details) {
+        console.error('Upstream AI error details:', error.details);
+      }
+      sendJson(res, error.statusCode, { error: error.message }, headers);
       return;
     }
 

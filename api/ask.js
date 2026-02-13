@@ -28,9 +28,10 @@ module.exports = async function handler(req, res) {
       if (error.statusCode === 429 && error.details) {
         res.setHeader('Retry-After', error.details);
       }
-      return res.status(error.statusCode).json(
-        error.details ? { error: error.message, details: error.details } : { error: error.message }
-      );
+      if (error.statusCode !== 429 && error.details) {
+        console.error('Upstream AI error details:', error.details);
+      }
+      return res.status(error.statusCode).json({ error: error.message });
     }
 
     console.error('Unexpected server error:', error);
