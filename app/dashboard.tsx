@@ -64,14 +64,13 @@ export default function DashboardScreen() {
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
     ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-  const localApiBaseUrl = 'http://127.0.0.1:3001';
-  const hostedApiBaseUrl = 'https://discoveragent.vercel.app';
-  const defaultApiBaseUrl =
+  const isGithubPagesHost =
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
-    window.location.hostname.endsWith('github.io')
-      ? hostedApiBaseUrl
-      : localApiBaseUrl;
+    window.location.hostname.endsWith('github.io');
+  const localApiBaseUrl = 'http://127.0.0.1:3001';
+  const hostedApiBaseUrl = 'https://discoveragent.vercel.app';
+  const defaultApiBaseUrl = isLocalWebHost ? localApiBaseUrl : isGithubPagesHost ? hostedApiBaseUrl : '';
   const apiBaseUrl = (
     isLocalWebHost
       ? localApiBaseUrl
