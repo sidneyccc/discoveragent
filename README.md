@@ -1,190 +1,77 @@
 # DiscoverAgent
 
-A cross-platform React Native application that runs on both Web and iOS.
+DiscoverAgent is an Expo + React Native app (Web + iOS) that generates source-clustered viewpoints for a question and supports voice transcription.
 
-## Features
+## Stack
 
-- 🌐 **Web Support**: Runs in any modern browser
-- 📱 **iOS Support**: Native iOS app
-- 🧭 **Navigation**: File-based routing with Expo Router
-- 📘 **TypeScript**: Full type safety
-- 🎨 **Modern UI**: Clean, responsive design
-
-## Prerequisites
-
-- Node.js 18+ installed
-- npm or yarn
-- For iOS development: macOS with Xcode installed
-- For iOS simulator: Xcode Command Line Tools
+- Expo / React Native / Expo Router
+- Node.js API (local `backend/server.js`)
+- Serverless API routes for deployment (`api/*.js`)
+- OpenAI Responses API + Transcriptions API
 
 ## Getting Started
 
-### Install Dependencies
+### 1) Install
 
 ```bash
 npm install
 ```
 
-### Running the App
-
-#### Web
-
-Run the app in your browser:
+### 2) Run the app
 
 ```bash
 npm run web
 ```
 
-This will start the development server and open the app at `http://localhost:8081`
-
-#### iOS Simulator
-
-Make sure you have Xcode installed, then run:
+### 3) Run local API server
 
 ```bash
-npm run ios
+npm run api
 ```
 
-This will build and launch the app in the iOS Simulator.
+## Build and Deploy
 
-#### Development Mode
-
-To start the Expo development server with options for all platforms:
-
-```bash
-npm start
-```
-
-Then press:
-- `w` to open in web browser
-- `i` to open in iOS simulator
-- `r` to reload the app
-
-## Project Structure
-
-```
-discoveragent/
-├── app/                  # App screens and navigation
-│   ├── _layout.tsx      # Root layout with navigation
-│   ├── index.tsx        # Home screen
-│   └── about.tsx        # About screen
-├── components/          # Reusable components
-├── assets/             # Images, fonts, and other assets
-├── app.json            # Expo configuration
-├── package.json        # Dependencies and scripts
-└── tsconfig.json       # TypeScript configuration
-```
-
-## Adding New Screens
-
-Expo Router uses file-based routing. To add a new screen:
-
-1. Create a new `.tsx` file in the `app/` directory
-2. Export a default component
-3. The file name becomes the route (e.g., `app/profile.tsx` → `/profile`)
-
-Example:
-
-```tsx
-// app/profile.tsx
-import { View, Text } from 'react-native';
-
-export default function ProfileScreen() {
-  return (
-    <View>
-      <Text>Profile Screen</Text>
-    </View>
-  );
-}
-```
-
-## Navigation
-
-Use the `Link` component or `useRouter` hook for navigation:
-
-```tsx
-import { Link } from 'expo-router';
-import { useRouter } from 'expo-router';
-
-// Using Link component
-<Link href="/about">Go to About</Link>
-
-// Using router hook
-const router = useRouter();
-router.push('/about');
-```
-
-## Building for Production
-
-### Web
+### Build static web output
 
 ```bash
 npm run build:web
 ```
 
-The static files will be in the `dist/` directory.
+Output is generated in `/dist`.
 
-## Deploying to GitHub Pages
+### Deploy to GitHub Pages
 
-This project is configured for easy deployment to GitHub Pages.
-
-### Option 1: Automatic Deployment (Recommended)
-
-The project includes a GitHub Actions workflow that automatically deploys to GitHub Pages on every push to the `main` branch.
-
-**Setup:**
-
-1. Push your code to GitHub:
-   ```bash
-   git add .
-   git commit -m "Setup GitHub Pages deployment"
-   git push origin main
-   ```
-
-2. Enable GitHub Pages in your repository:
-   - Go to Settings → Pages
-   - Under "Build and deployment", select "GitHub Actions" as the source
-
-3. The site will automatically deploy and be available at:
-   `https://[your-username].github.io/discoveragent/`
-
-### Option 2: Manual Deployment
-
-Deploy manually using the gh-pages package:
+- Automatic deploy is configured in `.github/workflows/deploy.yml` on pushes to `main`.
+- Manual deploy is also available:
 
 ```bash
 npm run deploy
 ```
 
-This will build and deploy the web app to the `gh-pages` branch.
+## Project Structure
 
-### iOS
+```text
+app/
+  _layout.tsx         Root navigator and hamburger menu
+  index.tsx           Main question + source clustering page
+  transcript.tsx      Placeholder transcript page
 
-```bash
-npx expo build:ios
+api/
+  ask.js              Serverless wrapper for Q&A endpoint
+  categorize.js       Serverless wrapper for source clustering endpoint
+  transcribe.js       Serverless wrapper for transcription endpoint
+
+backend/
+  api-core.js         Shared API business logic (single source of truth)
+  server.js           Local HTTP server using api-core handlers
 ```
 
-Or use EAS Build for a more streamlined process:
+## API Architecture
 
-```bash
-npm install -g eas-cli
-eas build --platform ios
-```
+To keep behavior consistent across local and deployed environments:
 
-## Tech Stack
+- `backend/api-core.js` contains shared logic (validation, rate limiting, OpenAI calls).
+- `backend/server.js` is a thin local HTTP wrapper.
+- `api/*.js` are thin serverless wrappers that reuse the same core logic.
 
-- **React Native**: Cross-platform mobile framework
-- **Expo**: Development platform and toolchain
-- **Expo Router**: File-based navigation
-- **TypeScript**: Static type checking
-- **React Native Web**: Render React Native components on web
-
-## Learn More
-
-- [Expo Documentation](https://docs.expo.dev/)
-- [React Native Documentation](https://reactnative.dev/)
-- [Expo Router Documentation](https://docs.expo.dev/router/introduction/)
-
-## License
-
-MIT
+This avoids code drift between local and production API behavior.
