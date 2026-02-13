@@ -420,7 +420,7 @@ export default function HomeScreen() {
         <View style={styles.backgroundOrbTwo} />
 
         <View style={styles.heroBlock}>
-          <Text style={styles.title}>Discover Agent</Text>
+          <Text style={styles.title}>Sid Agent</Text>
           <Text style={styles.subtitle}>
             Ask once and get clustered viewpoints.
           </Text>
