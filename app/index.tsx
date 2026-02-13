@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity, Platform, ScrollView, TextInput, Animated, Easing, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { FaMicrophone, FaStop, FaTv, FaRegCompass } from 'react-icons/fa';
-import { SiCnn, SiNeteasecloudmusic, SiReddit, SiSinaweibo, SiStackoverflow, SiWikipedia, SiYcombinator } from 'react-icons/si';
+import { SiCnn, SiNeteasecloudmusic, SiReddit, SiSinaweibo, SiYcombinator } from 'react-icons/si';
 import { useEffect, useRef, useState } from 'react';
 
 function renderInlineBold(line: string) {
@@ -103,8 +103,6 @@ const DEFAULT_SELECTED_SOURCES = [
 
 export default function HomeScreen() {
   const envApiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
-  const hasPlaceholderApiBaseUrl =
-    envApiBaseUrl.includes('<your-vercel-project>') || envApiBaseUrl.includes('your-vercel-project');
   const isLocalWebHost =
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
@@ -115,13 +113,25 @@ export default function HomeScreen() {
     window.location.hostname.endsWith('github.io');
   const localApiBaseUrl = 'http://127.0.0.1:3001';
   const hostedApiBaseUrl = 'https://discoveragent.vercel.app';
-  const defaultApiBaseUrl = isLocalWebHost ? localApiBaseUrl : isGithubPagesHost ? hostedApiBaseUrl : '';
+  const normalizedEnvApiBaseUrl = envApiBaseUrl.replace(/\/$/, '');
+  const envLooksLocal =
+    normalizedEnvApiBaseUrl.includes('127.0.0.1') ||
+    normalizedEnvApiBaseUrl.includes('localhost') ||
+    normalizedEnvApiBaseUrl.includes('::1');
+  const envLooksPlaceholder =
+    normalizedEnvApiBaseUrl.includes('<your-vercel-project>') ||
+    normalizedEnvApiBaseUrl.includes('your-vercel-project');
+
   const apiBaseUrl = (
     isLocalWebHost
-      ? localApiBaseUrl
-      : hasPlaceholderApiBaseUrl || !envApiBaseUrl
-        ? defaultApiBaseUrl
-        : envApiBaseUrl
+      ? normalizedEnvApiBaseUrl || localApiBaseUrl
+      : isGithubPagesHost
+        ? normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
+          ? normalizedEnvApiBaseUrl
+          : 'https://discoveragent.vercel.app'
+        : normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
+          ? normalizedEnvApiBaseUrl
+          : ''
   ).replace(/\/$/, '');
   const preferredLanguage =
     Platform.OS === 'web' &&
@@ -375,8 +385,6 @@ export default function HomeScreen() {
     { name: 'CCTV', url: 'https://english.cctv.com', icon: <FaTv size={32} color="#C8102E" /> },
     { name: 'Hacker News', url: 'https://news.ycombinator.com', icon: <SiYcombinator size={32} color="#FF6600" /> },
     { name: 'Reddit', url: 'https://www.reddit.com', icon: <SiReddit size={32} color="#FF4500" /> },
-    { name: 'Stack Overflow', url: 'https://stackoverflow.com', icon: <SiStackoverflow size={32} color="#F48024" /> },
-    { name: 'Wikipedia', url: 'https://www.wikipedia.org', icon: <SiWikipedia size={32} color="#111" /> },
   ];
 
   const isIOSWeb =
