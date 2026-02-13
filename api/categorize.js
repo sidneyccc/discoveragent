@@ -8,6 +8,10 @@ const TRUSTED_SOURCES = [
   'AP News',
   'BBC',
   'NPR',
+  'Weibo',
+  'CNN',
+  '网易',
+  'CCTV',
   'Hacker News',
   'Reddit',
   'Stack Overflow',
@@ -20,10 +24,14 @@ Use this trusted source priority order first when possible:
 2) AP News
 3) BBC
 4) NPR
-5) Hacker News
-6) Reddit
-7) Stack Overflow
-8) Wikipedia
+5) Weibo
+6) CNN
+7) 网易
+8) CCTV
+9) Hacker News
+10) Reddit
+11) Stack Overflow
+12) Wikipedia
 
 Instructions:
 - Categorize the response into source-based opinion buckets.
