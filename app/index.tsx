@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking, ScrollView, TextInput } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { FaHackerNews, FaMicrophone, FaRedditAlien, FaStackOverflow, FaStop, FaWikipediaW } from 'react-icons/fa';
-import { HiNewspaper } from 'react-icons/hi';
+import { FaMicrophone, FaStop, FaTv } from 'react-icons/fa';
+import { SiCnn, SiNeteasecloudmusic, SiReddit, SiSinaweibo, SiStackoverflow, SiWikipedia, SiYcombinator } from 'react-icons/si';
 import { useRef, useState } from 'react';
 
 function renderInlineBold(line: string) {
@@ -78,6 +78,14 @@ function renderRichText(text: string) {
   );
 }
 
+function sourceBadge(label: string, backgroundColor: string, color = '#fff') {
+  return (
+    <View style={[styles.sourceBadge, { backgroundColor }]}>
+      <Text style={[styles.sourceBadgeText, { color }]}>{label}</Text>
+    </View>
+  );
+}
+
 const DEFAULT_SELECTED_SOURCES = [
   'Reuters',
   'AP News',
@@ -143,18 +151,18 @@ export default function HomeScreen() {
   };
 
   const sources = [
-    { name: 'Reuters', url: 'https://www.reuters.com', icon: <HiNewspaper size={32} color="#111" /> },
-    { name: 'AP News', url: 'https://apnews.com', icon: <HiNewspaper size={32} color="#111" /> },
-    { name: 'BBC', url: 'https://www.bbc.com/news', icon: <HiNewspaper size={32} color="#111" /> },
-    { name: 'NPR', url: 'https://www.npr.org', icon: <HiNewspaper size={32} color="#111" /> },
-    { name: 'Weibo', url: 'https://weibo.com', icon: <HiNewspaper size={32} color="#E6162D" /> },
-    { name: 'CNN', url: 'https://www.cnn.com', icon: <HiNewspaper size={32} color="#CC0000" /> },
-    { name: '网易', url: 'https://www.163.com', icon: <HiNewspaper size={32} color="#D71920" /> },
-    { name: 'CCTV', url: 'https://english.cctv.com', icon: <HiNewspaper size={32} color="#C8102E" /> },
-    { name: 'Hacker News', url: 'https://news.ycombinator.com', icon: <FaHackerNews size={32} color="#FF6600" /> },
-    { name: 'Reddit', url: 'https://www.reddit.com', icon: <FaRedditAlien size={32} color="#FF4500" /> },
-    { name: 'Stack Overflow', url: 'https://stackoverflow.com', icon: <FaStackOverflow size={32} color="#F48024" /> },
-    { name: 'Wikipedia', url: 'https://www.wikipedia.org', icon: <FaWikipediaW size={32} color="#111" /> },
+    { name: 'Reuters', url: 'https://www.reuters.com', icon: sourceBadge('R', '#FF6F20') },
+    { name: 'AP News', url: 'https://apnews.com', icon: sourceBadge('AP', '#111') },
+    { name: 'BBC', url: 'https://www.bbc.com/news', icon: sourceBadge('BBC', '#000') },
+    { name: 'NPR', url: 'https://www.npr.org', icon: sourceBadge('NPR', '#D62020') },
+    { name: 'Weibo', url: 'https://weibo.com', icon: <SiSinaweibo size={32} color="#E6162D" /> },
+    { name: 'CNN', url: 'https://www.cnn.com', icon: <SiCnn size={32} color="#CC0000" /> },
+    { name: '网易', url: 'https://www.163.com', icon: <SiNeteasecloudmusic size={32} color="#D71920" /> },
+    { name: 'CCTV', url: 'https://english.cctv.com', icon: <FaTv size={32} color="#C8102E" /> },
+    { name: 'Hacker News', url: 'https://news.ycombinator.com', icon: <SiYcombinator size={32} color="#FF6600" /> },
+    { name: 'Reddit', url: 'https://www.reddit.com', icon: <SiReddit size={32} color="#FF4500" /> },
+    { name: 'Stack Overflow', url: 'https://stackoverflow.com', icon: <SiStackoverflow size={32} color="#F48024" /> },
+    { name: 'Wikipedia', url: 'https://www.wikipedia.org', icon: <SiWikipedia size={32} color="#111" /> },
   ];
 
   const isIOSWeb =
@@ -733,6 +741,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#1f2937',
     lineHeight: 22,
+  },
+  sourceBadge: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sourceBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: -0.2,
   },
   iconsContainer: {
     flexDirection: 'row',
