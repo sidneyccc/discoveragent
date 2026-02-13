@@ -141,14 +141,14 @@ export default function HomeScreen() {
   const [categorizedResult, setCategorizedResult] = useState('');
   const [categorizeError, setCategorizeError] = useState('');
   const [isAllSourcesLoading, setIsAllSourcesLoading] = useState(false);
-  const [isSourceCategorizing, setIsSourceCategorizing] = useState(false);
   const [allSourcesError, setAllSourcesError] = useState('');
-  const [sourceCategorizeError, setSourceCategorizeError] = useState('');
   const [allSourceSummaries, setAllSourceSummaries] = useState<Array<{
     name: string;
     url: string;
     summary: string;
     error: string;
+    isDisplayable?: boolean;
+    unusableReason?: string;
   }>>([]);
   const [clusteredSourcesResult, setClusteredSourcesResult] = useState('');
   const [clusteredSourcesMeta, setClusteredSourcesMeta] = useState('');
@@ -160,6 +160,8 @@ export default function HomeScreen() {
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const sourceScrollRef = useRef<ScrollView | null>(null);
   const sourceAutoScrollOffsetRef = useRef(0);
+  const sourceAutoScrollRafRef = useRef<number | null>(null);
+  const sourceAutoScrollLastTsRef = useRef(0);
   const sourceInteractionTimeoutRef = useRef<any>(null);
   const waveFlow = useRef(new Animated.Value(0)).current;
   const waveSwell = useRef(new Animated.Value(0)).current;
@@ -231,20 +233,36 @@ export default function HomeScreen() {
   useEffect(() => {
     if (sourceContentWidth <= sourceViewportWidth + 8) return;
 
-    const interval = setInterval(() => {
+    const speedPxPerSecond = 9;
+    const tick = (timestamp: number) => {
       if (isSourceListInteracting) return;
 
       const maxOffset = Math.max(0, sourceContentWidth - sourceViewportWidth);
-      let nextOffset = sourceAutoScrollOffsetRef.current + 0.35;
+      if (sourceAutoScrollLastTsRef.current === 0) {
+        sourceAutoScrollLastTsRef.current = timestamp;
+      }
+      const deltaSec = Math.max(0, (timestamp - sourceAutoScrollLastTsRef.current) / 1000);
+      sourceAutoScrollLastTsRef.current = timestamp;
+
+      let nextOffset = sourceAutoScrollOffsetRef.current + speedPxPerSecond * deltaSec;
       if (nextOffset > maxOffset) {
         nextOffset = 0;
       }
 
       sourceAutoScrollOffsetRef.current = nextOffset;
       sourceScrollRef.current?.scrollTo({ x: nextOffset, animated: false });
-    }, 32);
+      sourceAutoScrollRafRef.current = requestAnimationFrame(tick);
+    };
 
-    return () => clearInterval(interval);
+    sourceAutoScrollRafRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (sourceAutoScrollRafRef.current !== null) {
+        cancelAnimationFrame(sourceAutoScrollRafRef.current);
+      }
+      sourceAutoScrollRafRef.current = null;
+      sourceAutoScrollLastTsRef.current = 0;
+    };
   }, [isSourceListInteracting, sourceContentWidth, sourceViewportWidth]);
 
   useEffect(() => {
@@ -262,6 +280,7 @@ export default function HomeScreen() {
     }
     sourceInteractionTimeoutRef.current = setTimeout(() => {
       setIsSourceListInteracting(false);
+      sourceAutoScrollLastTsRef.current = 0;
     }, 1400);
   };
 
@@ -623,107 +642,66 @@ export default function HomeScreen() {
     }
   };
 
-  const requestSourceSummary = async (source: { name: string; url: string }) => {
-    let res: Response;
-    try {
-      res = await fetch(`${apiBaseUrl}/api/source-summary`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          sourceName: source.name,
-          sourceUrl: source.url,
-          preferredLanguage,
-        }),
-      });
-    } catch {
-      if (apiBaseUrl === localApiBaseUrl) {
-        res = await fetch(`${hostedApiBaseUrl}/api/source-summary`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            sourceName: source.name,
-            sourceUrl: source.url,
-            preferredLanguage,
-          }),
-        });
-      } else {
-        throw new Error('primary-source-summary-fetch-failed');
-      }
-    }
-
-    if (!res.ok && apiBaseUrl === localApiBaseUrl) {
-      try {
-        res = await fetch(`${hostedApiBaseUrl}/api/source-summary`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            sourceName: source.name,
-            sourceUrl: source.url,
-            preferredLanguage,
-          }),
-        });
-      } catch {
-        // keep original failure handling below
-      }
-    }
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to summarize source.');
-    }
-    return typeof data?.summary === 'string' && data.summary.trim() ? data.summary.trim() : 'No summary returned.';
-  };
-
-  const handleSummarizeAllSources = async () => {
+  const handleSummarizeAllSources = async (forceRefresh = false) => {
     setIsAllSourcesLoading(true);
     setAllSourcesError('');
-    setSourceCategorizeError('');
     setAllSourceSummaries([]);
     setClusteredSourcesResult('');
     setClusteredSourcesMeta('');
 
     try {
-      const settled = await Promise.allSettled(
-        sources.map(async (source) => {
-          try {
-            const summary = await requestSourceSummary(source);
-            return { name: source.name, url: source.url, summary, error: '' };
-          } catch (error) {
-            return {
-              name: source.name,
-              url: source.url,
-              summary: '',
-              error: error instanceof Error ? error.message : 'Failed to summarize source.',
-            };
-          }
-        })
+      let res: Response;
+      try {
+        res = await fetch(`${apiBaseUrl}/api/source-workflow`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            sources: sources.map((s) => ({ name: s.name, url: s.url })),
+            preferredLanguage,
+            forceRefresh,
+          }),
+        });
+      } catch {
+        if (apiBaseUrl === localApiBaseUrl) {
+          res = await fetch(`${hostedApiBaseUrl}/api/source-workflow`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              sources: sources.map((s) => ({ name: s.name, url: s.url })),
+              preferredLanguage,
+              forceRefresh,
+            }),
+          });
+        } else {
+          throw new Error('source-workflow-fetch-failed');
+        }
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to fetch source workflow.');
+      }
+
+      const summaries = Array.isArray(data?.sourceSummaries) ? data.sourceSummaries : [];
+      setAllSourceSummaries(summaries);
+      setClusteredSourcesResult(
+        typeof data?.clustered === 'string' && data.clustered.trim() ? data.clustered.trim() : ''
       );
 
-      const normalized = settled.map((item, idx) =>
-        item.status === 'fulfilled'
-          ? item.value
-          : {
-              name: sources[idx].name,
-              url: sources[idx].url,
-              summary: '',
-              error: 'Failed to summarize source.',
-            }
-      );
-
-      setAllSourceSummaries(normalized);
-      const failedCount = normalized.filter((s) => s.error).length;
+      const meta = data?.meta || {};
+      const fetchedCount = typeof meta.fetchedCount === 'number' ? meta.fetchedCount : summaries.length;
+      const totalSources = typeof meta.totalSources === 'number' ? meta.totalSources : summaries.length;
+      const hiddenCount = typeof meta.hiddenCount === 'number' ? meta.hiddenCount : 0;
+      const cacheHit = Boolean(data?.cache?.hit);
       setClusteredSourcesMeta(
-        failedCount > 0
-          ? `Fetched summaries for ${normalized.length - failedCount}/${normalized.length} sources.`
-          : `Fetched summaries for ${normalized.length} sources.`
+        `Fetched summaries for ${fetchedCount}/${totalSources} sources.` +
+          (hiddenCount > 0 ? ` Filtered ${hiddenCount} unusable source pages.` : '') +
+          (cacheHit ? ' (served from cache)' : ' (fresh refresh)')
       );
-      await handleCategorizeFetchedSources(normalized);
     } catch {
       setAllSourcesError(`Could not connect to API server at ${apiBaseUrl}.`);
     } finally {
@@ -731,67 +709,14 @@ export default function HomeScreen() {
     }
   };
 
-  const handleCategorizeFetchedSources = async (
-    sourceSummariesInput?: Array<{ name: string; url: string; summary: string; error: string }>
-  ) => {
-    const successful = (sourceSummariesInput || allSourceSummaries).filter((s) => !s.error && s.summary.trim());
-    if (!successful.length) {
-      setSourceCategorizeError('No successful source summaries to categorize.');
-      return;
-    }
-
-    setIsSourceCategorizing(true);
-    setSourceCategorizeError('');
-    setClusteredSourcesResult('');
-
-    try {
-      let res: Response;
-      try {
-        res = await fetch(`${apiBaseUrl}/api/source-categorize`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            sourceSummaries: successful.map((s) => ({ name: s.name, url: s.url, summary: s.summary })),
-            preferredLanguage,
-          }),
-        });
-      } catch {
-        if (apiBaseUrl === localApiBaseUrl) {
-          res = await fetch(`${hostedApiBaseUrl}/api/source-categorize`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              sourceSummaries: successful.map((s) => ({ name: s.name, url: s.url, summary: s.summary })),
-              preferredLanguage,
-            }),
-          });
-        } else {
-          throw new Error('source-categorize-fetch-failed');
-        }
-      }
-
-      const data = await res.json();
-      if (!res.ok) {
-        const message = typeof data?.error === 'string' ? data.error : 'Failed to categorize summaries.';
-        setSourceCategorizeError(message);
-        return;
-      }
-
-      setClusteredSourcesResult(
-        typeof data?.clustered === 'string' && data.clustered.trim()
-          ? data.clustered.trim()
-          : 'No clustered output returned.'
-      );
-    } catch {
-      setSourceCategorizeError(`Could not connect to API server at ${apiBaseUrl}.`);
-    } finally {
-      setIsSourceCategorizing(false);
-    }
-  };
+  useEffect(() => {
+    handleSummarizeAllSources(false);
+    const interval = setInterval(() => {
+      handleSummarizeAllSources(false);
+    }, 60 * 60 * 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
@@ -898,13 +823,13 @@ export default function HomeScreen() {
         <View style={styles.bulkActionWrap}>
           <TouchableOpacity
             style={[styles.bulkActionButton, isAllSourcesLoading ? styles.bulkActionButtonDisabled : null]}
-            onPress={handleSummarizeAllSources}
+            onPress={() => handleSummarizeAllSources(true)}
             disabled={isAllSourcesLoading}
           >
             <View style={styles.bulkActionButtonRow}>
               <FaRegCompass size={14} color="#fff" />
               <Text style={styles.bulkActionButtonText}>
-                {isAllSourcesLoading ? 'Gathering Latest Source Highlights...' : 'Discover Latest Highlights'}
+                {isAllSourcesLoading ? 'Refreshing Latest Source Highlights...' : 'Discover Latest Highlights'}
               </Text>
             </View>
           </TouchableOpacity>
@@ -921,32 +846,21 @@ export default function HomeScreen() {
 
         {clusteredSourcesMeta ? <Text style={styles.bulkMetaText}>{clusteredSourcesMeta}</Text> : null}
 
-        {allSourceSummaries.length > 0 ? (
+        {allSourceSummaries.filter((item) => !item.error && item.isDisplayable !== false && item.summary).length > 0 ? (
           <View style={styles.bulkSummaryList}>
-            {allSourceSummaries.map((item) => (
+            {allSourceSummaries
+              .filter((item) => !item.error && item.isDisplayable !== false && item.summary)
+              .map((item) => (
               <View key={item.name} style={styles.bulkSummaryCard}>
                 <Text style={styles.bulkSummaryTitle}>{item.name}</Text>
                 <Text style={styles.bulkSummaryUrl}>{item.url}</Text>
                 <View style={styles.bulkSummaryBody}>
-                  {item.error ? (
-                    <Text style={styles.bulkSummaryError}>{item.error}</Text>
-                  ) : (
-                    renderRichText(item.summary)
-                  )}
+                  {renderRichText(item.summary)}
                 </View>
               </View>
             ))}
           </View>
         ) : null}
-
-        {isSourceCategorizing ? (
-          <View style={styles.bulkLoadingWrap}>
-            <ActivityIndicator size="small" color="#2563eb" />
-            <Text style={styles.bulkLoadingText}>Organizing shared narratives by source coverage...</Text>
-          </View>
-        ) : null}
-
-        {sourceCategorizeError ? <Text style={styles.bulkErrorText}>{sourceCategorizeError}</Text> : null}
 
         {clusteredSourcesResult ? (
           <View style={styles.bulkSummaryList}>

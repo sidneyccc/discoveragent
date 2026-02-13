@@ -3,6 +3,8 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const OPENAI_TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
+const SOURCE_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
+const SOURCE_WORKFLOW_CACHE_TTL_MS = 60 * 60 * 1000;
 
 const TRUSTED_SOURCES = [
   'Reuters',
@@ -51,6 +53,9 @@ Instructions:
 `.trim();
 
 const requestLogByIp = new Map();
+const sourceSummaryCache = new Map();
+const sourceWorkflowCache = new Map();
+const sourceWorkflowInFlight = new Map();
 
 class ApiError extends Error {
   constructor(statusCode, message, details = '') {
@@ -135,6 +140,10 @@ function ensureApiKey() {
   if (!OPENAI_API_KEY) {
     throw new ApiError(500, 'AI service is not configured.');
   }
+}
+
+function getSourceSummaryCacheKey({ sourceName, sourceUrl, preferredLanguage }) {
+  return `${String(sourceName || '').trim().toLowerCase()}|${String(sourceUrl || '').trim()}|${String(preferredLanguage || '').trim().toLowerCase()}`;
 }
 
 function normalizePreferredLanguage(preferredLanguage) {
@@ -298,6 +307,16 @@ async function summarizeSource({ sourceName, sourceUrl, preferredLanguage }) {
   const normalizedSourceName = String(sourceName || '').trim() || 'Source';
   const normalizedSourceUrl = String(sourceUrl || '').trim();
   const targetLanguage = normalizePreferredLanguage(preferredLanguage);
+  const cacheKey = getSourceSummaryCacheKey({
+    sourceName: normalizedSourceName,
+    sourceUrl: normalizedSourceUrl,
+    preferredLanguage: targetLanguage,
+  });
+  const now = Date.now();
+  const cached = sourceSummaryCache.get(cacheKey);
+  if (cached && now - cached.ts < SOURCE_SUMMARY_CACHE_TTL_MS) {
+    return cached.value;
+  }
 
   ensureApiKey();
   const pageText = await fetchPageText(normalizedSourceUrl);
@@ -311,12 +330,15 @@ Visible page text snapshot:
 ${pageText}
 
 Task:
-1) Summarize the latest important things visible on this source homepage snapshot.
-2) Prioritize concrete, recent, high-signal items (major events, announcements, policy changes, market-moving updates).
-3) Return 4-8 concise bullets.
-4) Add a final bullet called "Limits" noting this is from a homepage snapshot and may miss paywalled/section pages.
-5) Do not mention underlying model, vendor, or provider.
-6) If preferred language is provided, output in that language.
+1) First validate quality: if this snapshot is mostly an error/login/paywall/captcha/access-denied/maintenance page, respond exactly:
+   UNUSABLE_SOURCE: <short reason>
+2) Otherwise summarize the latest important things visible on this source homepage snapshot.
+3) Prioritize concrete, recent, high-signal items (major events, announcements, policy changes, market-moving updates).
+4) Return 4-8 concise bullets.
+5) Add a final bullet called "Limits" noting this is from a homepage snapshot and may miss paywalled/section pages.
+6) Do not mention underlying model, vendor, or provider.
+7) If preferred language is provided, output in that language.
+8) Remove nonsensical fragments, malformed snippets, navigation noise, and duplicated points.
 `.trim();
 
   const responseJson = await postResponsesApi(
@@ -324,11 +346,17 @@ Task:
     userPrompt
   );
 
-  return {
-    summary: extractAnswer(responseJson) || 'No summary returned.',
+  const rawSummary = extractAnswer(responseJson) || 'No summary returned.';
+  const unusableMatch = rawSummary.match(/^UNUSABLE_SOURCE:\s*(.+)$/i);
+  const result = {
+    summary: unusableMatch ? '' : rawSummary,
     sourceName: normalizedSourceName,
     sourceUrl: normalizedSourceUrl,
+    isDisplayable: !unusableMatch,
+    unusableReason: unusableMatch ? unusableMatch[1].trim() : '',
   };
+  sourceSummaryCache.set(cacheKey, { ts: now, value: result });
+  return result;
 }
 
 async function summarizeAndClusterSources({ sources, preferredLanguage }) {
@@ -456,6 +484,7 @@ Requirements:
 5) Keep high-signal topics only.
 6) If preferred language is provided, output in that language.
 7) Do not mention underlying model, vendor, or provider.
+8) Remove items that are unclear, incoherent, or nonsensical.
 
 Per-source summaries:
 ${payload}
@@ -469,6 +498,122 @@ ${payload}
   return {
     clustered: extractAnswer(responseJson) || 'No clustered output returned.',
     sourceCount: normalized.length,
+  };
+}
+
+function getSourceWorkflowCacheKey({ sources, preferredLanguage }) {
+  const normalizedSources = (Array.isArray(sources) ? sources : [])
+    .filter((s) => s && typeof s.name === 'string' && typeof s.url === 'string')
+    .map((s) => `${String(s.name).trim()}|${String(s.url).trim()}`)
+    .sort()
+    .join('||');
+  const lang = normalizePreferredLanguage(preferredLanguage);
+  return `${lang}::${normalizedSources}`;
+}
+
+async function runSourceWorkflow({ sources, preferredLanguage }) {
+  const sourceList = Array.isArray(sources) ? sources : [];
+  if (!sourceList.length) {
+    throw new ApiError(400, 'At least one source is required.');
+  }
+
+  const sourceSummaries = await Promise.all(
+    sourceList.map(async (source) => {
+      try {
+        const result = await summarizeSource({
+          sourceName: source.name,
+          sourceUrl: source.url,
+          preferredLanguage,
+        });
+
+        return {
+          name: String(source.name || '').trim(),
+          url: String(source.url || '').trim(),
+          summary: result.summary || '',
+          error: '',
+          isDisplayable: result.isDisplayable !== false,
+          unusableReason: result.unusableReason || '',
+        };
+      } catch (error) {
+        return {
+          name: String(source.name || '').trim(),
+          url: String(source.url || '').trim(),
+          summary: '',
+          error: error instanceof Error ? error.message : 'Failed to summarize source.',
+          isDisplayable: false,
+          unusableReason: '',
+        };
+      }
+    })
+  );
+
+  const usable = sourceSummaries.filter((s) => !s.error && s.summary && s.isDisplayable !== false);
+  const failedCount = sourceSummaries.filter((s) => s.error).length;
+  const hiddenCount = sourceSummaries.filter((s) => !s.error && s.isDisplayable === false).length;
+
+  let clustered = '';
+  if (usable.length) {
+    const clusteredRes = await categorizeSourceSummaries({
+      sourceSummaries: usable.map((s) => ({ name: s.name, url: s.url, summary: s.summary })),
+      preferredLanguage,
+    });
+    clustered = clusteredRes.clustered || '';
+  }
+
+  return {
+    sourceSummaries,
+    clustered,
+    meta: {
+      totalSources: sourceSummaries.length,
+      fetchedCount: sourceSummaries.length - failedCount,
+      failedCount,
+      hiddenCount,
+      usableCount: usable.length,
+    },
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+async function getSourceWorkflow({ sources, preferredLanguage, forceRefresh = false }) {
+  const key = getSourceWorkflowCacheKey({ sources, preferredLanguage });
+  const now = Date.now();
+  const cached = sourceWorkflowCache.get(key);
+
+  if (!forceRefresh && cached && now - cached.ts < SOURCE_WORKFLOW_CACHE_TTL_MS) {
+    return {
+      ...cached.value,
+      cache: { hit: true, stale: false, ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS, ageMs: now - cached.ts },
+    };
+  }
+
+  if (sourceWorkflowInFlight.has(key)) {
+    const value = await sourceWorkflowInFlight.get(key);
+    const current = sourceWorkflowCache.get(key);
+    return {
+      ...value,
+      cache: {
+        hit: !!current,
+        stale: false,
+        ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS,
+        ageMs: current ? now - current.ts : 0,
+      },
+    };
+  }
+
+  const promise = runSourceWorkflow({ sources, preferredLanguage })
+    .then((value) => {
+      sourceWorkflowCache.set(key, { ts: Date.now(), value });
+      return value;
+    })
+    .finally(() => {
+      sourceWorkflowInFlight.delete(key);
+    });
+
+  sourceWorkflowInFlight.set(key, promise);
+  const value = await promise;
+  return {
+    ...value,
+    cache: { hit: !!cached, stale: false, ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS, ageMs: 0 },
   };
 }
 
@@ -524,6 +669,7 @@ module.exports = {
   summarizeSource,
   summarizeAndClusterSources,
   categorizeSourceSummaries,
+  getSourceWorkflow,
   transcribe,
   enforceRateLimit,
   getClientIpFromReq,

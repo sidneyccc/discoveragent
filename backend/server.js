@@ -1,5 +1,5 @@
 const http = require('http');
-const { ApiError, ask, categorize, summarizeSource, summarizeAndClusterSources, categorizeSourceSummaries, transcribe, enforceRateLimit, getClientIpFromReq } = require('./api-core');
+const { ApiError, ask, categorize, summarizeSource, summarizeAndClusterSources, categorizeSourceSummaries, getSourceWorkflow, transcribe, enforceRateLimit, getClientIpFromReq } = require('./api-core');
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3001);
@@ -122,6 +122,17 @@ const server = http.createServer((req, res) => {
       categorizeSourceSummaries({
         sourceSummaries: body.sourceSummaries,
         preferredLanguage: body.preferredLanguage,
+      })
+    );
+    return;
+  }
+
+  if (req.method === 'POST' && req.url === '/api/source-workflow') {
+    handleApiRequest(req, res, (body) =>
+      getSourceWorkflow({
+        sources: body.sources,
+        preferredLanguage: body.preferredLanguage,
+        forceRefresh: Boolean(body.forceRefresh),
       })
     );
     return;
