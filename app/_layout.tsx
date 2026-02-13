@@ -10,7 +10,7 @@ export default function RootLayout() {
   const router = useRouter();
   const pathname = usePathname();
 
-  const navigateTo = (route: '/' | '/transcript') => {
+  const navigateTo = (route: '/' | '/transcript' | '/dashboard') => {
     setMenuOpen(false);
     if (route === pathname) return;
     router.push(route);
@@ -62,6 +62,11 @@ export default function RootLayout() {
           options={{
           }}
         />
+        <Stack.Screen
+          name="dashboard"
+          options={{
+          }}
+        />
       </Stack>
 
       {menuOpen ? (
@@ -79,6 +84,12 @@ export default function RootLayout() {
                 onPress={() => navigateTo('/transcript')}
               >
                 <Text style={styles.menuItemText}>Transcript</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.menuItem, pathname === '/dashboard' ? styles.menuItemActive : null]}
+                onPress={() => navigateTo('/dashboard')}
+              >
+                <Text style={styles.menuItemText}>Dashboard</Text>
               </Pressable>
             </View>
           </Pressable>

@@ -713,7 +713,7 @@ export default function HomeScreen() {
     handleSummarizeAllSources(false);
     const interval = setInterval(() => {
       handleSummarizeAllSources(false);
-    }, 60 * 60 * 1000);
+    }, 6 * 60 * 60 * 1000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -820,6 +820,8 @@ export default function HomeScreen() {
           </ScrollView>
         </View>
 
+        <View style={styles.sectionDivider} />
+
         <View style={styles.bulkActionWrap}>
           <TouchableOpacity
             style={[styles.bulkActionButton, isAllSourcesLoading ? styles.bulkActionButtonDisabled : null]}
@@ -827,8 +829,13 @@ export default function HomeScreen() {
             disabled={isAllSourcesLoading}
           >
             <View style={styles.bulkActionButtonRow}>
-              <FaRegCompass size={14} color="#fff" />
-              <Text style={styles.bulkActionButtonText}>
+              <FaRegCompass size={14} color={isAllSourcesLoading ? '#94a3b8' : '#0f766e'} />
+              <Text
+                style={[
+                  styles.bulkActionButtonText,
+                  isAllSourcesLoading ? styles.bulkActionButtonTextDisabled : null,
+                ]}
+              >
                 {isAllSourcesLoading ? 'Refreshing Latest Source Highlights...' : 'Discover Latest Highlights'}
               </Text>
             </View>
@@ -1193,23 +1200,44 @@ const styles = StyleSheet.create({
   bulkActionWrap: {
     width: '100%',
     maxWidth: 640,
-    marginTop: 16,
+    marginTop: 18,
     marginBottom: 8,
   },
+  sectionDivider: {
+    width: '100%',
+    maxWidth: 640,
+    marginTop: 30,
+    borderTopWidth: 1,
+    borderTopColor: '#dbe4ef',
+  },
   bulkActionButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 12,
+    backgroundColor: '#f0fdfa',
+    borderRadius: 999,
     height: 44,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#99f6e4',
+    shadowColor: '#0f766e',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 2,
   },
   bulkActionButtonDisabled: {
-    backgroundColor: '#93c5fd',
+    backgroundColor: '#f8fafc',
+    borderColor: '#e2e8f0',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   bulkActionButtonText: {
-    color: '#fff',
+    color: '#0f766e',
     fontSize: 14,
     fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  bulkActionButtonTextDisabled: {
+    color: '#94a3b8',
   },
   bulkActionButtonRow: {
     flexDirection: 'row',

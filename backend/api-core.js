@@ -1,10 +1,16 @@
+const crypto = require('node:crypto');
+
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const OPENAI_TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1';
+const REDIS_REST_URL = String(process.env.REDIS_REST_URL || '').trim().replace(/\/+$/, '');
+const REDIS_REST_TOKEN = String(process.env.REDIS_REST_TOKEN || '').trim();
+const REDIS_KEY_PREFIX = String(process.env.REDIS_KEY_PREFIX || 'sidagent').trim() || 'sidagent';
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
 const SOURCE_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
-const SOURCE_WORKFLOW_CACHE_TTL_MS = 60 * 60 * 1000;
+const SOURCE_WORKFLOW_CACHE_TTL_MS = 7 * 60 * 60 * 1000;
+const SOURCE_WORKFLOW_CACHE_TTL_SEC = Math.floor(SOURCE_WORKFLOW_CACHE_TTL_MS / 1000);
 
 const TRUSTED_SOURCES = [
   'Reuters',
@@ -56,6 +62,15 @@ const requestLogByIp = new Map();
 const sourceSummaryCache = new Map();
 const sourceWorkflowCache = new Map();
 const sourceWorkflowInFlight = new Map();
+const usageMetrics = {
+  startedAt: Date.now(),
+  totalRequests: 0,
+  successRequests: 0,
+  errorRequests: 0,
+  totalLatencyMs: 0,
+  endpointStats: new Map(),
+  recentRequests: [],
+};
 
 class ApiError extends Error {
   constructor(statusCode, message, details = '') {
@@ -134,6 +149,97 @@ function enforceRateLimit(ip) {
   if (!result.allowed) {
     throw new ApiError(429, 'Rate limit exceeded. Maximum 10 requests per minute per IP.', String(result.retryAfterSec));
   }
+}
+
+function recordApiUsage({ endpoint, method = 'POST', statusCode, durationMs = 0, cacheHit, cacheBackend }) {
+  const endpointKey = String(endpoint || 'unknown').trim() || 'unknown';
+  const methodLabel = String(method || 'POST').trim().toUpperCase() || 'POST';
+  const status = Number(statusCode || 0);
+  const latency = Math.max(0, Number(durationMs || 0));
+  const nowIso = new Date().toISOString();
+
+  usageMetrics.totalRequests += 1;
+  usageMetrics.totalLatencyMs += latency;
+  if (status >= 200 && status < 400) {
+    usageMetrics.successRequests += 1;
+  } else {
+    usageMetrics.errorRequests += 1;
+  }
+
+  const endpointCurrent = usageMetrics.endpointStats.get(endpointKey) || {
+    endpoint: endpointKey,
+    method: methodLabel,
+    total: 0,
+    success: 0,
+    errors: 0,
+    status2xx: 0,
+    status4xx: 0,
+    status5xx: 0,
+    rateLimited: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    totalLatencyMs: 0,
+    lastSeenAt: '',
+  };
+
+  endpointCurrent.total += 1;
+  endpointCurrent.totalLatencyMs += latency;
+  endpointCurrent.lastSeenAt = nowIso;
+
+  if (status >= 200 && status < 300) endpointCurrent.status2xx += 1;
+  if (status >= 400 && status < 500) endpointCurrent.status4xx += 1;
+  if (status >= 500) endpointCurrent.status5xx += 1;
+  if (status === 429) endpointCurrent.rateLimited += 1;
+  if (status >= 200 && status < 400) endpointCurrent.success += 1;
+  if (status >= 400) endpointCurrent.errors += 1;
+  if (typeof cacheHit === 'boolean') {
+    if (cacheHit) endpointCurrent.cacheHits += 1;
+    else endpointCurrent.cacheMisses += 1;
+  }
+
+  usageMetrics.endpointStats.set(endpointKey, endpointCurrent);
+
+  usageMetrics.recentRequests.push({
+    ts: nowIso,
+    endpoint: endpointKey,
+    method: methodLabel,
+    statusCode: status,
+    durationMs: latency,
+    cacheHit: typeof cacheHit === 'boolean' ? cacheHit : null,
+    cacheBackend: typeof cacheBackend === 'string' && cacheBackend ? cacheBackend : '',
+  });
+  if (usageMetrics.recentRequests.length > 120) {
+    usageMetrics.recentRequests.splice(0, usageMetrics.recentRequests.length - 120);
+  }
+}
+
+function getUsageMetricsSnapshot() {
+  const total = usageMetrics.totalRequests;
+  const successRate = total ? usageMetrics.successRequests / total : 0;
+  const avgLatencyMs = total ? usageMetrics.totalLatencyMs / total : 0;
+  const now = Date.now();
+
+  const endpoints = Array.from(usageMetrics.endpointStats.values())
+    .map((entry) => ({
+      ...entry,
+      avgLatencyMs: entry.total ? entry.totalLatencyMs / entry.total : 0,
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  return {
+    generatedAt: new Date(now).toISOString(),
+    startedAt: new Date(usageMetrics.startedAt).toISOString(),
+    uptimeSec: Math.max(0, Math.floor((now - usageMetrics.startedAt) / 1000)),
+    totals: {
+      requests: total,
+      successRequests: usageMetrics.successRequests,
+      errorRequests: usageMetrics.errorRequests,
+      successRate,
+      avgLatencyMs,
+    },
+    endpoints,
+    recentRequests: usageMetrics.recentRequests.slice(-30).reverse(),
+  };
 }
 
 function ensureApiKey() {
@@ -511,6 +617,66 @@ function getSourceWorkflowCacheKey({ sources, preferredLanguage }) {
   return `${lang}::${normalizedSources}`;
 }
 
+function isRedisEnabled() {
+  return Boolean(REDIS_REST_URL && REDIS_REST_TOKEN);
+}
+
+function getRedisSourceWorkflowKey(cacheKey) {
+  const hash = crypto.createHash('sha256').update(cacheKey).digest('hex');
+  return `${REDIS_KEY_PREFIX}:source-workflow:${hash}`;
+}
+
+async function redisCommand(command) {
+  const response = await fetch(REDIS_REST_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${REDIS_REST_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(command),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Redis request failed with status ${response.status}`);
+  }
+
+  const payload = await response.json();
+  if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'result')) {
+    return payload.result;
+  }
+
+  return payload;
+}
+
+async function getWorkflowFromRedis(cacheKey) {
+  if (!isRedisEnabled()) return null;
+
+  const redisKey = getRedisSourceWorkflowKey(cacheKey);
+  try {
+    const serialized = await redisCommand(['GET', redisKey]);
+    if (typeof serialized !== 'string' || !serialized.trim()) return null;
+    const parsed = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== 'object' || !parsed.value || typeof parsed.ts !== 'number') {
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    console.warn('Redis read failed, falling back to in-memory cache:', error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+async function setWorkflowInRedis(cacheKey, value) {
+  if (!isRedisEnabled()) return;
+  const redisKey = getRedisSourceWorkflowKey(cacheKey);
+  const payload = JSON.stringify({ ts: Date.now(), value });
+  try {
+    await redisCommand(['SET', redisKey, payload, 'EX', String(SOURCE_WORKFLOW_CACHE_TTL_SEC)]);
+  } catch (error) {
+    console.warn('Redis write failed, continuing with in-memory cache:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 async function runSourceWorkflow({ sources, preferredLanguage }) {
   const sourceList = Array.isArray(sources) ? sources : [];
   if (!sourceList.length) {
@@ -577,12 +743,32 @@ async function runSourceWorkflow({ sources, preferredLanguage }) {
 async function getSourceWorkflow({ sources, preferredLanguage, forceRefresh = false }) {
   const key = getSourceWorkflowCacheKey({ sources, preferredLanguage });
   const now = Date.now();
+  const redisCached = !forceRefresh ? await getWorkflowFromRedis(key) : null;
+  if (!forceRefresh && redisCached && now - redisCached.ts < SOURCE_WORKFLOW_CACHE_TTL_MS) {
+    return {
+      ...redisCached.value,
+      cache: {
+        hit: true,
+        stale: false,
+        ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS,
+        ageMs: now - redisCached.ts,
+        backend: 'redis',
+      },
+    };
+  }
+
   const cached = sourceWorkflowCache.get(key);
 
   if (!forceRefresh && cached && now - cached.ts < SOURCE_WORKFLOW_CACHE_TTL_MS) {
     return {
       ...cached.value,
-      cache: { hit: true, stale: false, ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS, ageMs: now - cached.ts },
+      cache: {
+        hit: true,
+        stale: false,
+        ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS,
+        ageMs: now - cached.ts,
+        backend: 'memory',
+      },
     };
   }
 
@@ -596,6 +782,7 @@ async function getSourceWorkflow({ sources, preferredLanguage, forceRefresh = fa
         stale: false,
         ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS,
         ageMs: current ? now - current.ts : 0,
+        backend: 'memory',
       },
     };
   }
@@ -603,7 +790,10 @@ async function getSourceWorkflow({ sources, preferredLanguage, forceRefresh = fa
   const promise = runSourceWorkflow({ sources, preferredLanguage })
     .then((value) => {
       sourceWorkflowCache.set(key, { ts: Date.now(), value });
-      return value;
+      return setWorkflowInRedis(key, value).then(() => value);
+    })
+    .catch((error) => {
+      throw error;
     })
     .finally(() => {
       sourceWorkflowInFlight.delete(key);
@@ -613,7 +803,13 @@ async function getSourceWorkflow({ sources, preferredLanguage, forceRefresh = fa
   const value = await promise;
   return {
     ...value,
-    cache: { hit: !!cached, stale: false, ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS, ageMs: 0 },
+    cache: {
+      hit: Boolean(cached || redisCached),
+      stale: false,
+      ttlMs: SOURCE_WORKFLOW_CACHE_TTL_MS,
+      ageMs: 0,
+      backend: isRedisEnabled() ? 'redis+memory' : 'memory',
+    },
   };
 }
 
@@ -671,6 +867,8 @@ module.exports = {
   categorizeSourceSummaries,
   getSourceWorkflow,
   transcribe,
+  recordApiUsage,
+  getUsageMetricsSnapshot,
   enforceRateLimit,
   getClientIpFromReq,
 };

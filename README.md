@@ -29,6 +29,18 @@ npm run web
 npm run api
 ```
 
+### 4) Optional: enable global Redis cache
+
+The source workflow endpoint supports cross-instance cache via Redis REST (recommended for deployed environments with multiple server instances).
+
+Add these env vars:
+
+- `REDIS_REST_URL`: Redis REST endpoint (for example, Upstash REST URL)
+- `REDIS_REST_TOKEN`: bearer token for the REST endpoint
+- `REDIS_KEY_PREFIX`: optional key namespace (default: `sidagent`)
+
+If Redis is not configured, the API automatically falls back to in-memory cache.
+
 ## Build and Deploy
 
 ### Build static web output
@@ -54,11 +66,14 @@ npm run deploy
 app/
   _layout.tsx         Root navigator and hamburger menu
   index.tsx           Main question + source clustering page
+  dashboard.tsx       Usage metrics dashboard page
   transcript.tsx      Placeholder transcript page
 
 api/
   ask.js              Serverless wrapper for Q&A endpoint
   categorize.js       Serverless wrapper for source clustering endpoint
+  metrics.js          Serverless usage metrics endpoint
+  source-workflow.js  Serverless wrapper for all-source summarize + cluster flow
   transcribe.js       Serverless wrapper for transcription endpoint
 
 backend/
@@ -71,6 +86,7 @@ backend/
 To keep behavior consistent across local and deployed environments:
 
 - `backend/api-core.js` contains shared logic (validation, rate limiting, OpenAI calls).
+- `backend/api-core.js` also tracks API usage metrics in memory for dashboard reporting.
 - `backend/server.js` is a thin local HTTP wrapper.
 - `api/*.js` are thin serverless wrappers that reuse the same core logic.
 
