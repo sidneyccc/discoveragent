@@ -22,6 +22,24 @@ export default function RootLayout() {
         initialRouteName="index"
         screenOptions={{
           headerShown: true,
+          headerBackVisible: false,
+          headerLeft: () => <View style={styles.headerSideSpacer} />,
+          headerTitleAlign: 'center',
+          headerStyle: {
+            backgroundColor: '#ffffff',
+          },
+          headerShadowVisible: true,
+          headerTintColor: '#111827',
+          headerTitle: () => (
+            <View style={styles.brandTitleWrap}>
+              <View style={styles.brandHalo}>
+                <View style={styles.brandDotOuter}>
+                  <View style={styles.brandDotInner} />
+                </View>
+              </View>
+              <Text style={styles.brandTitle}>SidAgent</Text>
+            </View>
+          ),
           headerRight: () => (
             <Pressable
               accessibilityRole="button"
@@ -37,13 +55,11 @@ export default function RootLayout() {
         <Stack.Screen
           name="index"
           options={{
-            title: 'Home',
           }}
         />
         <Stack.Screen
           name="transcript"
           options={{
-            title: 'Transcript',
           }}
         />
       </Stack>
@@ -56,7 +72,7 @@ export default function RootLayout() {
                 style={[styles.menuItem, pathname === '/' ? styles.menuItemActive : null]}
                 onPress={() => navigateTo('/')}
               >
-                <Text style={styles.menuItemText}>Home</Text>
+                <Text style={styles.menuItemText}>Credible Search</Text>
               </Pressable>
               <Pressable
                 style={[styles.menuItem, pathname === '/transcript' ? styles.menuItemActive : null]}
@@ -74,8 +90,59 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   menuButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  headerSideSpacer: {
+    width: 40,
+    height: 40,
+  },
+  brandTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  brandHalo: {
+    width: 20,
+    height: 20,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(129, 140, 248, 0.18)',
+    shadowColor: '#818cf8',
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 0 },
+  },
+  brandDotOuter: {
+    width: 11,
+    height: 11,
+    borderRadius: 999,
+    borderWidth: 1.8,
+    borderColor: '#64748b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#ffffff',
+  },
+  brandDotInner: {
+    width: 4.5,
+    height: 4.5,
+    borderRadius: 999,
+    backgroundColor: '#60a5fa',
+  },
+  brandTitle: {
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '800',
+    letterSpacing: -0.8,
+    color: '#6b7280',
+    textShadowColor: 'rgba(255,255,255,0.6)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
