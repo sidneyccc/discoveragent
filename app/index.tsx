@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, TouchableOpacity, Platform, ScrollView, TextInput, Animated, Easing, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, ScrollView, TextInput, Animated, Easing, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { FaMicrophone, FaStop, FaTv, FaRegCompass } from 'react-icons/fa';
 import { SiCnn, SiNeteasecloudmusic, SiReddit, SiSinaweibo, SiYcombinator } from 'react-icons/si';
@@ -78,6 +78,28 @@ function renderRichText(text: string) {
   );
 }
 
+function splitRankedClusters(text: string) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!normalized) return [];
+
+  const numberedBlocks = Array.from(normalized.matchAll(/(?:^|\n)(\d+[.)]\s[\s\S]*?)(?=\n\d+[.)]\s|$)/g))
+    .map((m) => (m[1] || '').trim())
+    .filter(Boolean);
+  if (numberedBlocks.length) return numberedBlocks;
+
+  const headingBlocks = Array.from(normalized.matchAll(/(?:^|\n)(#{2,4}\s[^\n]+[\s\S]*?)(?=\n#{2,4}\s|$)/g))
+    .map((m) => (m[1] || '').trim())
+    .filter(Boolean);
+  if (headingBlocks.length) return headingBlocks;
+
+  const titledBlocks = Array.from(normalized.matchAll(/(?:^|\n)(Title:\s[^\n]+[\s\S]*?)(?=\nTitle:\s|$)/g))
+    .map((m) => (m[1] || '').trim())
+    .filter(Boolean);
+  if (titledBlocks.length) return titledBlocks;
+
+  return [normalized];
+}
+
 function sourceBadge(label: string, backgroundColor: string, color = '#fff') {
   return (
     <View style={[styles.sourceBadge, { backgroundColor }]}>
@@ -102,17 +124,15 @@ const DEFAULT_SELECTED_SOURCES = [
 ];
 
 export default function HomeScreen() {
+  const { width: viewportWidth } = useWindowDimensions();
+  const isMobileClusterLayout = viewportWidth < 760;
   const envApiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
   const isLocalWebHost =
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
     ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-  const isGithubPagesHost =
-    Platform.OS === 'web' &&
-    typeof window !== 'undefined' &&
-    window.location.hostname.endsWith('github.io');
   const localApiBaseUrl = 'http://127.0.0.1:3001';
-  const hostedApiBaseUrl = 'https://discoveragent.vercel.app';
+  const fallbackHostedApiBaseUrl = 'https://discoveragent.vercel.app';
   const normalizedEnvApiBaseUrl = envApiBaseUrl.replace(/\/$/, '');
   const envLooksLocal =
     normalizedEnvApiBaseUrl.includes('127.0.0.1') ||
@@ -125,13 +145,9 @@ export default function HomeScreen() {
   const apiBaseUrl = (
     isLocalWebHost
       ? normalizedEnvApiBaseUrl || localApiBaseUrl
-      : isGithubPagesHost
-        ? normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
-          ? normalizedEnvApiBaseUrl
-          : 'https://discoveragent.vercel.app'
-        : normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
-          ? normalizedEnvApiBaseUrl
-          : ''
+      : normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
+        ? normalizedEnvApiBaseUrl
+        : ''
   ).replace(/\/$/, '');
   const preferredLanguage =
     Platform.OS === 'web' &&
@@ -161,6 +177,7 @@ export default function HomeScreen() {
   }>>([]);
   const [clusteredSourcesResult, setClusteredSourcesResult] = useState('');
   const [clusteredSourcesMeta, setClusteredSourcesMeta] = useState('');
+  const [showSourceSummaries, setShowSourceSummaries] = useState(false);
   const [sourceViewportWidth, setSourceViewportWidth] = useState(0);
   const [sourceContentWidth, setSourceContentWidth] = useState(0);
   const [isSourceListInteracting, setIsSourceListInteracting] = useState(false);
@@ -403,6 +420,10 @@ export default function HomeScreen() {
     !!navigator.mediaDevices?.getUserMedia &&
     !!(window as any).MediaRecorder;
   const canUseVoiceInput = canUseSpeechRecognition || canUseAudioRecording;
+  const rankedClusterCards = splitRankedClusters(clusteredSourcesResult);
+  const displayableSourceSummaries = allSourceSummaries.filter(
+    (item) => !item.error && item.isDisplayable !== false && item.summary
+  );
 
   const stopMediaStream = () => {
     if (!mediaStreamRef.current) return;
@@ -672,7 +693,7 @@ export default function HomeScreen() {
         });
       } catch {
         if (apiBaseUrl === localApiBaseUrl) {
-          res = await fetch(`${hostedApiBaseUrl}/api/source-workflow`, {
+          res = await fetch(`${fallbackHostedApiBaseUrl}/api/source-workflow`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -799,6 +820,65 @@ export default function HomeScreen() {
           ) : null}
         </View>
 
+        <View style={styles.rankClusterTopWrap}>
+          <View style={styles.bulkActionWrap}>
+            <TouchableOpacity
+              style={[styles.bulkActionButton, isAllSourcesLoading ? styles.bulkActionButtonDisabled : null]}
+              onPress={() => handleSummarizeAllSources(true)}
+              disabled={isAllSourcesLoading}
+            >
+              <View style={styles.bulkActionButtonRow}>
+                <FaRegCompass size={14} color={isAllSourcesLoading ? '#94a3b8' : '#0f766e'} />
+                <Text
+                  style={[
+                    styles.bulkActionButtonText,
+                    isAllSourcesLoading ? styles.bulkActionButtonTextDisabled : null,
+                  ]}
+                >
+                  {isAllSourcesLoading ? 'Refreshing Latest Source Highlights...' : 'Discover Latest Highlights'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          {isAllSourcesLoading ? (
+            <View style={styles.bulkLoadingWrap}>
+              <ActivityIndicator size="small" color="#2563eb" />
+              <Text style={styles.bulkLoadingText}>Fetching sources in parallel and summarizing each source...</Text>
+            </View>
+          ) : null}
+
+          {allSourcesError ? <Text style={styles.bulkErrorText}>{allSourcesError}</Text> : null}
+          {clusteredSourcesMeta ? <Text style={styles.bulkMetaText}>{clusteredSourcesMeta}</Text> : null}
+
+          {rankedClusterCards.length > 0 ? (
+            <View style={styles.clusterSectionWrap}>
+              <Text style={styles.clusterSectionTitle}>Ranked Source Clusters</Text>
+              {isMobileClusterLayout ? (
+                <View style={styles.clusterCardsColumn}>
+                  {rankedClusterCards.map((clusterText, idx) => (
+                    <View key={`ranked-cluster-${idx}`} style={[styles.clusterCard, styles.clusterCardMobile]}>
+                      <View style={styles.clusterCardBody}>{renderRichText(clusterText)}</View>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.clusterCardsRow}
+                >
+                  {rankedClusterCards.map((clusterText, idx) => (
+                    <View key={`ranked-cluster-${idx}`} style={styles.clusterCard}>
+                      <View style={styles.clusterCardBody}>{renderRichText(clusterText)}</View>
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          ) : null}
+        </View>
+
         <View style={styles.iconsSection}>
           <ScrollView
             ref={sourceScrollRef}
@@ -829,63 +909,33 @@ export default function HomeScreen() {
 
         <View style={styles.sectionDivider} />
 
-        <View style={styles.bulkActionWrap}>
-          <TouchableOpacity
-            style={[styles.bulkActionButton, isAllSourcesLoading ? styles.bulkActionButtonDisabled : null]}
-            onPress={() => handleSummarizeAllSources(true)}
-            disabled={isAllSourcesLoading}
-          >
-            <View style={styles.bulkActionButtonRow}>
-              <FaRegCompass size={14} color={isAllSourcesLoading ? '#94a3b8' : '#0f766e'} />
-              <Text
-                style={[
-                  styles.bulkActionButtonText,
-                  isAllSourcesLoading ? styles.bulkActionButtonTextDisabled : null,
-                ]}
-              >
-                {isAllSourcesLoading ? 'Refreshing Latest Source Highlights...' : 'Discover Latest Highlights'}
+        {displayableSourceSummaries.length > 0 ? (
+          <View style={styles.bulkSummaryList}>
+            <TouchableOpacity
+              style={styles.sourceSummaryToggleButton}
+              onPress={() => setShowSourceSummaries((prev) => !prev)}
+            >
+              <Text style={styles.sourceSummaryToggleText}>
+                {showSourceSummaries
+                  ? 'Hide Source Summaries'
+                  : `Show Source Summaries (${displayableSourceSummaries.length})`}
               </Text>
-            </View>
-          </TouchableOpacity>
-        </View>
+            </TouchableOpacity>
 
-        {isAllSourcesLoading ? (
-          <View style={styles.bulkLoadingWrap}>
-            <ActivityIndicator size="small" color="#2563eb" />
-            <Text style={styles.bulkLoadingText}>Fetching sources in parallel and summarizing each source...</Text>
-          </View>
-        ) : null}
-
-        {allSourcesError ? <Text style={styles.bulkErrorText}>{allSourcesError}</Text> : null}
-
-        {clusteredSourcesMeta ? <Text style={styles.bulkMetaText}>{clusteredSourcesMeta}</Text> : null}
-
-        {allSourceSummaries.filter((item) => !item.error && item.isDisplayable !== false && item.summary).length > 0 ? (
-          <View style={styles.bulkSummaryList}>
-            {allSourceSummaries
-              .filter((item) => !item.error && item.isDisplayable !== false && item.summary)
-              .map((item) => (
-              <View key={item.name} style={styles.bulkSummaryCard}>
-                <Text style={styles.bulkSummaryTitle}>{item.name}</Text>
-                <Text style={styles.bulkSummaryUrl}>{item.url}</Text>
-                <View style={styles.bulkSummaryBody}>
-                  {renderRichText(item.summary)}
+            {showSourceSummaries ? (
+              displayableSourceSummaries.map((item) => (
+                <View key={item.name} style={styles.bulkSummaryCard}>
+                  <Text style={styles.bulkSummaryTitle}>{item.name}</Text>
+                  <Text style={styles.bulkSummaryUrl}>{item.url}</Text>
+                  <View style={styles.bulkSummaryBody}>
+                    {renderRichText(item.summary)}
+                  </View>
                 </View>
-              </View>
-            ))}
+              ))
+            ) : null}
           </View>
         ) : null}
 
-        {clusteredSourcesResult ? (
-          <View style={styles.bulkSummaryList}>
-            <View style={styles.bulkSummaryCard}>
-              <Text style={styles.bulkSummaryTitle}>Ranked Source Clusters</Text>
-              <View style={styles.bulkSummaryBody}>
-                {renderRichText(clusteredSourcesResult)}
-              </View>
-            </View>
-          </View>
-        ) : null}
       </View>
     </ScrollView>
   );
@@ -996,6 +1046,11 @@ const styles = StyleSheet.create({
     elevation: 5,
     borderWidth: 1,
     borderColor: '#eceff3',
+  },
+  rankClusterTopWrap: {
+    width: '100%',
+    maxWidth: 760,
+    marginBottom: 12,
   },
   cardTitle: {
     fontSize: 19,
@@ -1207,7 +1262,7 @@ const styles = StyleSheet.create({
   bulkActionWrap: {
     width: '100%',
     maxWidth: 640,
-    marginTop: 18,
+    marginTop: 2,
     marginBottom: 8,
   },
   sectionDivider: {
@@ -1277,11 +1332,66 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748b',
   },
+  clusterSectionWrap: {
+    width: '100%',
+    maxWidth: 760,
+    marginTop: 10,
+  },
+  clusterSectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 8,
+  },
+  clusterCardsRow: {
+    paddingRight: 12,
+    gap: 10,
+  },
+  clusterCardsColumn: {
+    width: '100%',
+    gap: 10,
+  },
+  clusterCard: {
+    width: 320,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 12,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  clusterCardMobile: {
+    width: '100%',
+  },
+  clusterCardBody: {
+    gap: 4,
+  },
   bulkSummaryList: {
     width: '100%',
     maxWidth: 760,
     marginTop: 12,
     gap: 10,
+  },
+  sourceSummaryToggleButton: {
+    width: '100%',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+    minHeight: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  sourceSummaryToggleText: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.1,
   },
   bulkSummaryCard: {
     width: '100%',

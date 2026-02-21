@@ -84,6 +84,37 @@ For persistent dashboard analytics across deployments/restarts, configure Redis 
 
 ## Build and Deploy
 
+### Local testing (recommended)
+
+Run the app with live reload in one terminal:
+
+```bash
+npm run web
+```
+
+Run the local API in a second terminal:
+
+```bash
+npm run api
+```
+
+Then open `http://localhost:8081`.
+
+### Restart whole app locally
+
+From the project root, stop existing local listeners and relaunch both services:
+
+```bash
+for p in 3001 8081; do lsof -tiTCP:$p -sTCP:LISTEN -n -P | xargs -r kill; done
+npm run api
+```
+
+In a second terminal:
+
+```bash
+npm run web
+```
+
 ### Build static web output
 
 ```bash

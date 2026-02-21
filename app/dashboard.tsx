@@ -100,10 +100,6 @@ export default function DashboardScreen() {
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
     ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-  const isGithubPagesHost =
-    Platform.OS === 'web' &&
-    typeof window !== 'undefined' &&
-    window.location.hostname.endsWith('github.io');
   const localApiBaseUrl = 'http://127.0.0.1:3001';
   const normalizedEnvApiBaseUrl = envApiBaseUrl.replace(/\/$/, '');
   const envLooksLocal =
@@ -117,13 +113,9 @@ export default function DashboardScreen() {
   const apiBaseUrl = (
     isLocalWebHost
       ? normalizedEnvApiBaseUrl || localApiBaseUrl
-      : isGithubPagesHost
-        ? normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
-          ? normalizedEnvApiBaseUrl
-          : 'https://discoveragent.vercel.app'
-        : normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
-          ? normalizedEnvApiBaseUrl
-          : ''
+      : normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
+        ? normalizedEnvApiBaseUrl
+        : ''
   ).replace(/\/$/, '');
 
   const [metrics, setMetrics] = useState<UsageMetrics | null>(null);
