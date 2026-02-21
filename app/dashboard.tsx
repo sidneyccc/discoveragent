@@ -1,5 +1,6 @@
 import { ActivityIndicator, Platform, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAppLanguage } from '../lib/language-context';
 
 type EndpointMetric = {
   endpoint: string;
@@ -95,6 +96,8 @@ function formatHourLabel(isoLike: string) {
 }
 
 export default function DashboardScreen() {
+  const { language } = useAppLanguage();
+  const isZh = language === 'zh';
   const envApiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
   const isLocalWebHost =
     Platform.OS === 'web' &&
@@ -136,19 +139,19 @@ export default function DashboardScreen() {
       });
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to fetch usage metrics.');
+        throw new Error(typeof data?.error === 'string' ? data.error : (isZh ? '获取指标失败。' : 'Failed to fetch usage metrics.'));
       }
       if (!mountedRef.current) return;
       setMetrics(data as UsageMetrics);
     } catch {
       if (!mountedRef.current) return;
-      setError(`Could not connect to API server at ${apiBaseUrl}.`);
+      setError(isZh ? `无法连接 API 服务：${apiBaseUrl}` : `Could not connect to API server at ${apiBaseUrl}.`);
     } finally {
       if (!mountedRef.current) return;
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [apiBaseUrl]);
+  }, [apiBaseUrl, isZh]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -241,14 +244,14 @@ export default function DashboardScreen() {
 
       <View style={styles.content}>
         <View style={styles.heroBlock}>
-          <Text style={styles.title}>Usage Dashboard</Text>
-          <Text style={styles.subtitle}>Live request metrics from your API instance.</Text>
+          <Text style={styles.title}>{isZh ? '使用仪表盘' : 'Usage Dashboard'}</Text>
+          <Text style={styles.subtitle}>{isZh ? '查看 API 实例的实时请求指标。' : 'Live request metrics from your API instance.'}</Text>
         </View>
 
         {isLoading ? (
           <View style={styles.loadingCard}>
             <ActivityIndicator size="small" color="#1f2937" />
-            <Text style={styles.loadingText}>Loading metrics...</Text>
+            <Text style={styles.loadingText}>{isZh ? '正在加载指标...' : 'Loading metrics...'}</Text>
           </View>
         ) : null}
 
@@ -261,19 +264,19 @@ export default function DashboardScreen() {
         {metrics ? (
           <View style={styles.cardsWrap}>
             <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Total Requests</Text>
+              <Text style={styles.statLabel}>{isZh ? '总请求数' : 'Total Requests'}</Text>
               <Text style={styles.statValue}>{topStats.requests}</Text>
             </View>
             <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Success Rate</Text>
+              <Text style={styles.statLabel}>{isZh ? '成功率' : 'Success Rate'}</Text>
               <Text style={styles.statValue}>{topStats.successRate}</Text>
             </View>
             <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Avg Latency</Text>
+              <Text style={styles.statLabel}>{isZh ? '平均延迟' : 'Avg Latency'}</Text>
               <Text style={styles.statValue}>{topStats.avgLatency}</Text>
             </View>
             <View style={styles.statCard}>
-              <Text style={styles.statLabel}>Uptime</Text>
+              <Text style={styles.statLabel}>{isZh ? '运行时长' : 'Uptime'}</Text>
               <Text style={styles.statValue}>{topStats.uptime}</Text>
             </View>
           </View>
@@ -281,15 +284,15 @@ export default function DashboardScreen() {
 
         {metrics?.refresh ? (
           <View style={styles.panel}>
-            <Text style={styles.panelTitle}>News Refresh History</Text>
+            <Text style={styles.panelTitle}>{isZh ? '新闻刷新历史' : 'News Refresh History'}</Text>
             <Text style={styles.endpointMeta}>
-              Last run: {formatTimestamp(metrics.refresh.lastRunAt)} | status: {metrics.refresh.lastStatus || 'unknown'}
+              {isZh ? '最近运行' : 'Last run'}: {formatTimestamp(metrics.refresh.lastRunAt)} | {isZh ? '状态' : 'status'}: {metrics.refresh.lastStatus || (isZh ? 'unknown' : 'unknown')}
             </Text>
             <Text style={styles.endpointMeta}>
-              Total runs: {metrics.refresh.totalRuns || 0} | success: {metrics.refresh.successRuns || 0} | failed: {metrics.refresh.failedRuns || 0}
+              {isZh ? '总运行次数' : 'Total runs'}: {metrics.refresh.totalRuns || 0} | {isZh ? '成功' : 'success'}: {metrics.refresh.successRuns || 0} | {isZh ? '失败' : 'failed'}: {metrics.refresh.failedRuns || 0}
             </Text>
             <Text style={styles.endpointMeta}>
-              Avg refresh duration: {Math.round(metrics.refresh.avgDurationMs || 0)} ms
+              {isZh ? '平均刷新耗时' : 'Avg refresh duration'}: {Math.round(metrics.refresh.avgDurationMs || 0)} ms
             </Text>
 
             {refreshTimeline.length ? (
@@ -324,9 +327,9 @@ export default function DashboardScreen() {
                       {run.status.toUpperCase()} | {run.trigger}
                     </Text>
                     <Text style={styles.recentMeta}>
-                      {formatTimestamp(run.ts)} | {run.usableCount}/{run.sourceCount} usable | {Math.round(run.durationMs)} ms
+                      {formatTimestamp(run.ts)} | {run.usableCount}/{run.sourceCount} {isZh ? '可用' : 'usable'} | {Math.round(run.durationMs)} ms
                     </Text>
-                    {run.error ? <Text style={styles.recentMeta}>error: {run.error}</Text> : null}
+                    {run.error ? <Text style={styles.recentMeta}>{isZh ? '错误' : 'error'}: {run.error}</Text> : null}
                   </View>
                 ))}
               </View>
@@ -336,7 +339,7 @@ export default function DashboardScreen() {
 
         {requestsTimeline.length ? (
           <View style={styles.panel}>
-            <Text style={styles.panelTitle}>Request Timeline (Recent Hours)</Text>
+            <Text style={styles.panelTitle}>{isZh ? '请求时间线（最近几小时）' : 'Request Timeline (Recent Hours)'}</Text>
             <View style={styles.chartFrame}>
               <View style={styles.chartBarsRow}>
                 {requestsTimeline.map((bucket, idx) => {
@@ -357,7 +360,7 @@ export default function DashboardScreen() {
 
         {metrics?.endpoints?.length ? (
           <View style={styles.panel}>
-            <Text style={styles.panelTitle}>Endpoint Breakdown</Text>
+            <Text style={styles.panelTitle}>{isZh ? '接口分布' : 'Endpoint Breakdown'}</Text>
             <View style={styles.endpointBarsWrap}>
               {endpointUsageBars.map((item) => (
                 <View key={item.endpoint} style={styles.endpointBarRow}>
@@ -378,11 +381,11 @@ export default function DashboardScreen() {
                   <Text style={styles.endpointMethod}>{endpoint.method}</Text>
                 </View>
                 <Text style={styles.endpointMeta}>
-                  {endpoint.total} req | {Math.round(endpoint.avgLatencyMs)} ms avg | {endpoint.status4xx}x 4xx | {endpoint.status5xx}x 5xx
+                  {endpoint.total} req | {Math.round(endpoint.avgLatencyMs)} ms {isZh ? '平均' : 'avg'} | {endpoint.status4xx}x 4xx | {endpoint.status5xx}x 5xx
                 </Text>
                 {endpoint.cacheHits + endpoint.cacheMisses > 0 ? (
                   <Text style={styles.endpointMeta}>
-                    cache: {endpoint.cacheHits} hit / {endpoint.cacheMisses} miss
+                    {isZh ? '缓存' : 'cache'}: {endpoint.cacheHits} {isZh ? '命中' : 'hit'} / {endpoint.cacheMisses} {isZh ? '未命中' : 'miss'}
                   </Text>
                 ) : null}
               </View>
@@ -392,7 +395,7 @@ export default function DashboardScreen() {
 
         {metrics?.recentRequests?.length ? (
           <View style={styles.panel}>
-            <Text style={styles.panelTitle}>Recent Requests</Text>
+            <Text style={styles.panelTitle}>{isZh ? '最近请求' : 'Recent Requests'}</Text>
             {metrics.recentRequests.slice(0, 12).map((item, idx) => (
               <View key={`${item.ts}-${idx}`} style={styles.recentRow}>
                 <Text style={styles.recentText}>
@@ -400,7 +403,9 @@ export default function DashboardScreen() {
                 </Text>
                 <Text style={styles.recentMeta}>
                   {item.statusCode} | {Math.round(item.durationMs)} ms
-                  {typeof item.cacheHit === 'boolean' ? ` | cache ${item.cacheHit ? 'hit' : 'miss'}` : ''}
+                  {typeof item.cacheHit === 'boolean'
+                    ? ` | ${isZh ? '缓存' : 'cache'} ${item.cacheHit ? (isZh ? '命中' : 'hit') : (isZh ? '未命中' : 'miss')}`
+                    : ''}
                 </Text>
               </View>
             ))}

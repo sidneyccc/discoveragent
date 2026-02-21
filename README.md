@@ -38,6 +38,7 @@ Optional env vars for the background refresh:
 - `SOURCE_REFRESH_INTERVAL_MS`: refresh interval in milliseconds (minimum 60000)
 - `SOURCE_REFRESH_FORCE`: set to `true` to bypass cache and force full refresh each run (default: `true`)
 - `SOURCE_REFRESH_LANG`: preferred language passed into source workflow (default: `en-US`)
+- `SOURCE_REFRESH_LANGS`: optional comma-separated language list to prewarm multiple caches (example: `zh-CN,en-US`)
 - `SOURCE_REFRESH_SOURCES_JSON`: JSON array of `{ "name": "...", "url": "..." }` to override default source list
 
 ### 3.1) Production periodic refresh (Vercel)

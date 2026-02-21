@@ -25,7 +25,14 @@ module.exports = async function handler(req, res) {
     enforceRateLimit(ip);
 
     const result = await ask(req.body?.question);
-    recordApiUsage({ endpoint, method: req.method, statusCode: 200, durationMs: Date.now() - startTs });
+    recordApiUsage({
+      endpoint,
+      method: req.method,
+      statusCode: 200,
+      durationMs: Date.now() - startTs,
+      cacheHit: Boolean(result?.cache?.hit),
+      cacheBackend: typeof result?.cache?.backend === 'string' ? result.cache.backend : '',
+    });
     return res.status(200).json(result);
   } catch (error) {
     if (error instanceof ApiError) {

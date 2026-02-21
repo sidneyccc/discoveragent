@@ -4,11 +4,14 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useState } from 'react';
 import { FaBars } from 'react-icons/fa';
+import { AppLanguageProvider, useAppLanguage } from '../lib/language-context';
 
-export default function RootLayout() {
+function RootLayoutInner() {
   const [menuOpen, setMenuOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
+  const { language, setLanguage } = useAppLanguage();
+  const isZh = language === 'zh';
 
   const navigateTo = (route: '/' | '/transcript' | '/dashboard') => {
     setMenuOpen(false);
@@ -33,7 +36,7 @@ export default function RootLayout() {
           headerTitle: () => (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Go to homepage"
+              accessibilityLabel={isZh ? '返回首页' : 'Go to homepage'}
               onPress={() => navigateTo('/')}
               style={styles.brandTitlePressable}
             >
@@ -50,7 +53,7 @@ export default function RootLayout() {
           headerRight: () => (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Open menu"
+              accessibilityLabel={isZh ? '打开菜单' : 'Open menu'}
               onPress={() => setMenuOpen((prev) => !prev)}
               style={styles.menuButton}
             >
@@ -81,28 +84,44 @@ export default function RootLayout() {
           <Pressable style={styles.menuSheet} onPress={(event) => event.stopPropagation()}>
             <View style={styles.menuList}>
               <Pressable
+                style={styles.menuItem}
+                onPress={() => setLanguage(isZh ? 'en' : 'zh')}
+              >
+                <Text style={styles.menuItemText}>
+                  {isZh ? '语言: 中文 (切换到 English)' : 'Language: English (Switch to 中文)'}
+                </Text>
+              </Pressable>
+              <Pressable
                 style={[styles.menuItem, pathname === '/' ? styles.menuItemActive : null]}
                 onPress={() => navigateTo('/')}
               >
-                <Text style={styles.menuItemText}>Credible Search</Text>
+                <Text style={styles.menuItemText}>{isZh ? '可信新闻' : 'Credible Search'}</Text>
               </Pressable>
               <Pressable
                 style={[styles.menuItem, pathname === '/transcript' ? styles.menuItemActive : null]}
                 onPress={() => navigateTo('/transcript')}
               >
-                <Text style={styles.menuItemText}>Transcript</Text>
+                <Text style={styles.menuItemText}>{isZh ? '转录' : 'Transcript'}</Text>
               </Pressable>
               <Pressable
                 style={[styles.menuItem, pathname === '/dashboard' ? styles.menuItemActive : null]}
                 onPress={() => navigateTo('/dashboard')}
               >
-                <Text style={styles.menuItemText}>Dashboard</Text>
+                <Text style={styles.menuItemText}>{isZh ? '仪表盘' : 'Dashboard'}</Text>
               </Pressable>
             </View>
           </Pressable>
         </Pressable>
       ) : null}
     </SafeAreaProvider>
+  );
+}
+
+export default function RootLayout() {
+  return (
+    <AppLanguageProvider>
+      <RootLayoutInner />
+    </AppLanguageProvider>
   );
 }
 

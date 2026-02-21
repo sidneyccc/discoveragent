@@ -24,6 +24,10 @@ const SOURCE_REFRESH_INTERVAL_MS = Math.max(
 );
 const SOURCE_REFRESH_FORCE = String(process.env.SOURCE_REFRESH_FORCE || 'true').trim().toLowerCase() === 'true';
 const SOURCE_REFRESH_LANG = String(process.env.SOURCE_REFRESH_LANG || 'en-US').trim();
+const SOURCE_REFRESH_LANGS = String(process.env.SOURCE_REFRESH_LANGS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 const DEFAULT_PERIODIC_SOURCES = [
   { name: 'Reuters', url: 'https://www.reuters.com' },
   { name: 'AP News', url: 'https://apnews.com' },
@@ -55,6 +59,9 @@ function parseRefreshSourcesFromEnv() {
 }
 
 const SOURCE_REFRESH_SOURCES = parseRefreshSourcesFromEnv();
+const REFRESH_LANGUAGES = SOURCE_REFRESH_LANGS.length
+  ? Array.from(new Set(SOURCE_REFRESH_LANGS))
+  : Array.from(new Set([SOURCE_REFRESH_LANG, 'zh-CN', 'en-US'].filter(Boolean)));
 let refreshTimer = null;
 let refreshInProgress = false;
 
@@ -68,17 +75,21 @@ async function runPeriodicSourceRefresh(trigger) {
   refreshInProgress = true;
   const startedAt = Date.now();
   try {
-    const payload = await getSourceWorkflow({
-      sources: SOURCE_REFRESH_SOURCES,
-      preferredLanguage: SOURCE_REFRESH_LANG,
-      forceRefresh: SOURCE_REFRESH_FORCE,
-    });
-    const usableCount = Number(payload?.meta?.usableCount || 0);
-    const totalSources = Number(payload?.meta?.totalSources || SOURCE_REFRESH_SOURCES.length);
-    const cacheBackend = typeof payload?.cache?.backend === 'string' ? payload.cache.backend : 'memory';
-    console.log(
-      `[source-refresh] ${trigger} run complete in ${Date.now() - startedAt}ms. usable=${usableCount}/${totalSources}, cache=${cacheBackend}`
-    );
+    for (const refreshLanguage of REFRESH_LANGUAGES) {
+      const langStartedAt = Date.now();
+      const payload = await getSourceWorkflow({
+        sources: SOURCE_REFRESH_SOURCES,
+        preferredLanguage: refreshLanguage,
+        forceRefresh: SOURCE_REFRESH_FORCE,
+      });
+      const usableCount = Number(payload?.meta?.usableCount || 0);
+      const totalSources = Number(payload?.meta?.totalSources || SOURCE_REFRESH_SOURCES.length);
+      const cacheBackend = typeof payload?.cache?.backend === 'string' ? payload.cache.backend : 'memory';
+      console.log(
+        `[source-refresh] ${trigger} lang=${refreshLanguage} complete in ${Date.now() - langStartedAt}ms. usable=${usableCount}/${totalSources}, cache=${cacheBackend}`
+      );
+    }
+    console.log(`[source-refresh] ${trigger} run complete in ${Date.now() - startedAt}ms across ${REFRESH_LANGUAGES.length} language(s).`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[source-refresh] ${trigger} run failed: ${message}`);
@@ -94,7 +105,7 @@ function schedulePeriodicSourceRefresh() {
   }
 
   console.log(
-    `[source-refresh] Enabled. intervalMs=${SOURCE_REFRESH_INTERVAL_MS}, onStart=${SOURCE_REFRESH_ON_START}, forceRefresh=${SOURCE_REFRESH_FORCE}, sources=${SOURCE_REFRESH_SOURCES.length}`
+    `[source-refresh] Enabled. intervalMs=${SOURCE_REFRESH_INTERVAL_MS}, onStart=${SOURCE_REFRESH_ON_START}, forceRefresh=${SOURCE_REFRESH_FORCE}, sources=${SOURCE_REFRESH_SOURCES.length}, languages=${REFRESH_LANGUAGES.join(',')}`
   );
 
   if (SOURCE_REFRESH_ON_START) {
@@ -195,7 +206,16 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'POST' && req.url === '/api/ask') {
-    handleApiRequest(req, res, '/api/ask', (body) => ask(body.question));
+    handleApiRequest(
+      req,
+      res,
+      '/api/ask',
+      (body) => ask(body.question),
+      (payload) => ({
+        cacheHit: Boolean(payload?.cache?.hit),
+        cacheBackend: typeof payload?.cache?.backend === 'string' ? payload.cache.backend : '',
+      })
+    );
     return;
   }
 

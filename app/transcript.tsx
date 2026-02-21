@@ -1,7 +1,10 @@
 import { Animated, Easing, StyleSheet, Text, View } from 'react-native';
 import { useEffect, useRef } from 'react';
+import { useAppLanguage } from '../lib/language-context';
 
 export default function TranscriptScreen() {
+  const { language } = useAppLanguage();
+  const isZh = language === 'zh';
   const waveFlow = useRef(new Animated.Value(0)).current;
   const waveSwell = useRef(new Animated.Value(0)).current;
   const waveDrift = useRef(new Animated.Value(0)).current;
@@ -155,7 +158,7 @@ export default function TranscriptScreen() {
       <Animated.View style={[styles.backgroundBubble, styles.backgroundBubbleSix, bubbleOneStyle]} />
       <View style={styles.content}>
         <View style={styles.heroBlock}>
-          <Text style={styles.title}>Transcript</Text>
+          <Text style={styles.title}>{isZh ? '转录' : 'Transcript'}</Text>
         </View>
       </View>
     </View>

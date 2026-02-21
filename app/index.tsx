@@ -1,8 +1,9 @@
-import { View, Text, StyleSheet, TouchableOpacity, Platform, ScrollView, TextInput, Animated, Easing, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, ScrollView, TextInput, Animated, Easing, ActivityIndicator, useWindowDimensions, Modal } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { FaMicrophone, FaStop, FaTv, FaRegCompass } from 'react-icons/fa';
 import { SiCnn, SiNeteasecloudmusic, SiReddit, SiSinaweibo, SiYcombinator } from 'react-icons/si';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useAppLanguage } from '../lib/language-context';
 
 function renderInlineBold(line: string) {
   const parts = line.split(/(\*\*[^*]+\*\*)/g);
@@ -122,9 +123,12 @@ const DEFAULT_SELECTED_SOURCES = [
   'Stack Overflow',
   'Wikipedia',
 ];
+const TOP_NEWS_PREFETCH_COUNT = 5;
 
 export default function HomeScreen() {
   const { width: viewportWidth } = useWindowDimensions();
+  const { language, preferredLocale } = useAppLanguage();
+  const isZh = language === 'zh';
   const isMobileClusterLayout = viewportWidth < 760;
   const envApiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
   const isLocalWebHost =
@@ -149,13 +153,7 @@ export default function HomeScreen() {
         ? normalizedEnvApiBaseUrl
         : ''
   ).replace(/\/$/, '');
-  const preferredLanguage =
-    Platform.OS === 'web' &&
-    typeof navigator !== 'undefined' &&
-    typeof navigator.language === 'string' &&
-    navigator.language
-      ? navigator.language
-      : 'en-US';
+  const preferredLanguage = preferredLocale;
 
   const [question, setQuestion] = useState('');
   const [submittedQuestion, setSubmittedQuestion] = useState('');
@@ -178,9 +176,16 @@ export default function HomeScreen() {
   const [clusteredSourcesResult, setClusteredSourcesResult] = useState('');
   const [clusteredSourcesMeta, setClusteredSourcesMeta] = useState('');
   const [showSourceSummaries, setShowSourceSummaries] = useState(false);
+  const [selectedRankedNewsIndex, setSelectedRankedNewsIndex] = useState<number | null>(null);
+  const [isNewsDetailLoading, setIsNewsDetailLoading] = useState(false);
+  const [newsDetailText, setNewsDetailText] = useState('');
+  const [newsDetailError, setNewsDetailError] = useState('');
   const [sourceViewportWidth, setSourceViewportWidth] = useState(0);
   const [sourceContentWidth, setSourceContentWidth] = useState(0);
   const [isSourceListInteracting, setIsSourceListInteracting] = useState(false);
+  const newsDetailCacheRef = useRef<Map<string, string>>(new Map());
+  const newsDetailInFlightRef = useRef<Map<string, Promise<string>>>(new Map());
+  const newsPrefetchedKeysRef = useRef<Set<string>>(new Set());
   const recognitionRef = useRef<any>(null);
   const mediaRecorderRef = useRef<any>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -424,6 +429,84 @@ export default function HomeScreen() {
   const displayableSourceSummaries = allSourceSummaries.filter(
     (item) => !item.error && item.isDisplayable !== false && item.summary
   );
+
+  const buildNewsDetailPrompt = (newsItemText: string) => `
+${isZh ? '你是一位新闻分析助手，帮助用户理解一条被选中的新闻。' : 'You are helping the user understand a ranked news item.'}
+
+${isZh ? '用户选中的新闻内容：' : 'Ranked news item selected by user:'}
+${newsItemText}
+
+${isZh ? '任务：' : 'Task:'}
+${isZh ? '1) 用通俗中文解释这条新闻大意。' : '1) Explain what this item likely refers to in plain language.'}
+${isZh ? '2) 说明关键背景与当前影响。' : '2) Give key context and why it matters now.'}
+${isZh ? '3) 给出 3-6 个可继续追问的问题。' : '3) List 3-6 important follow-up questions the user could ask next.'}
+${isZh ? '4) 明确指出原始内容中的不确定性或歧义。' : '4) Call out uncertainty or ambiguity in the source text.'}
+${isZh ? '5) 输出要简洁、结构化、可执行。' : '5) Keep output concise, structured, and practical.'}
+${isZh ? '6) 必须使用简体中文输出。' : '6) Output must be in English.'}
+`.trim();
+
+  const getNewsDetailCacheKey = useCallback(
+    (newsItemText: string) => `${preferredLanguage || (isZh ? 'zh-CN' : 'en-US')}::${newsItemText}`,
+    [preferredLanguage, isZh]
+  );
+
+  const fetchNewsDetail = useCallback(async (newsItemText: string) => {
+    const trimmed = String(newsItemText || '').trim();
+    if (!trimmed) {
+      return isZh ? '未返回该新闻的详细内容。' : 'No detail returned for this news item.';
+    }
+
+    const cacheKey = getNewsDetailCacheKey(trimmed);
+    const cachedText = newsDetailCacheRef.current.get(cacheKey);
+    if (cachedText) return cachedText;
+
+    const existingInFlight = newsDetailInFlightRef.current.get(cacheKey);
+    if (existingInFlight) return existingInFlight;
+
+    const requestPromise = (async () => {
+      const prompt = buildNewsDetailPrompt(trimmed);
+      let res: Response;
+      try {
+        res = await fetch(`${apiBaseUrl}/api/ask`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ question: prompt }),
+        });
+      } catch {
+        if (apiBaseUrl === localApiBaseUrl) {
+          res = await fetch(`${fallbackHostedApiBaseUrl}/api/ask`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ question: prompt }),
+          });
+        } else {
+          throw new Error('ask-fetch-failed');
+        }
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        const message = typeof data?.error === 'string' ? data.error : 'Failed to fetch news detail.';
+        throw new Error(message);
+      }
+
+      const answer = typeof data?.answer === 'string' ? data.answer.trim() : '';
+      const detailText = answer || (isZh ? '未返回该新闻的详细内容。' : 'No detail returned for this news item.');
+      newsDetailCacheRef.current.set(cacheKey, detailText);
+      return detailText;
+    })();
+
+    newsDetailInFlightRef.current.set(cacheKey, requestPromise);
+    try {
+      return await requestPromise;
+    } finally {
+      newsDetailInFlightRef.current.delete(cacheKey);
+    }
+  }, [apiBaseUrl, fallbackHostedApiBaseUrl, getNewsDetailCacheKey, isZh, localApiBaseUrl]);
 
   const stopMediaStream = () => {
     if (!mediaStreamRef.current) return;
@@ -676,6 +759,10 @@ export default function HomeScreen() {
     setAllSourceSummaries([]);
     setClusteredSourcesResult('');
     setClusteredSourcesMeta('');
+    setSelectedRankedNewsIndex(null);
+    setNewsDetailText('');
+    setNewsDetailError('');
+    setIsNewsDetailLoading(false);
 
     try {
       let res: Response;
@@ -725,17 +812,64 @@ export default function HomeScreen() {
       const totalSources = typeof meta.totalSources === 'number' ? meta.totalSources : summaries.length;
       const hiddenCount = typeof meta.hiddenCount === 'number' ? meta.hiddenCount : 0;
       const cacheHit = Boolean(data?.cache?.hit);
-      setClusteredSourcesMeta(
-        `Fetched summaries for ${fetchedCount}/${totalSources} sources.` +
+      setClusteredSourcesMeta(isZh
+        ? `已抓取 ${fetchedCount}/${totalSources} 个来源摘要。` +
+          (hiddenCount > 0 ? ` 已过滤 ${hiddenCount} 个不可用来源页面。` : '') +
+          (cacheHit ? '（来自缓存）' : '（最新刷新）')
+        : `Fetched summaries for ${fetchedCount}/${totalSources} sources.` +
           (hiddenCount > 0 ? ` Filtered ${hiddenCount} unusable source pages.` : '') +
           (cacheHit ? ' (served from cache)' : ' (fresh refresh)')
       );
     } catch {
-      setAllSourcesError(`Could not connect to API server at ${apiBaseUrl}.`);
+      setAllSourcesError(isZh ? `无法连接 API 服务：${apiBaseUrl}` : `Could not connect to API server at ${apiBaseUrl}.`);
     } finally {
       setIsAllSourcesLoading(false);
     }
   };
+
+  const handleLearnMoreNews = async (newsItemText: string, index: number) => {
+    const trimmed = String(newsItemText || '').trim();
+    if (!trimmed) return;
+
+    setSelectedRankedNewsIndex(index);
+    setIsNewsDetailLoading(true);
+    setNewsDetailText('');
+    setNewsDetailError('');
+
+    try {
+      const detailText = await fetchNewsDetail(trimmed);
+      setNewsDetailText(detailText);
+    } catch (error) {
+      setNewsDetailError(error instanceof Error ? error.message : (isZh ? '获取新闻详情失败。' : 'Failed to fetch news detail.'));
+    } finally {
+      setIsNewsDetailLoading(false);
+    }
+  };
+
+  const closeNewsDetailModal = () => {
+    setSelectedRankedNewsIndex(null);
+  };
+
+  useEffect(() => {
+    newsPrefetchedKeysRef.current.clear();
+  }, [clusteredSourcesResult, preferredLanguage]);
+
+  useEffect(() => {
+    if (!clusteredSourcesResult.trim()) return;
+    const topNewsItems = splitRankedClusters(clusteredSourcesResult)
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .slice(0, TOP_NEWS_PREFETCH_COUNT);
+
+    topNewsItems.forEach((item) => {
+      const cacheKey = getNewsDetailCacheKey(item);
+      if (newsPrefetchedKeysRef.current.has(cacheKey)) return;
+      newsPrefetchedKeysRef.current.add(cacheKey);
+      void fetchNewsDetail(item).catch(() => {
+        newsPrefetchedKeysRef.current.delete(cacheKey);
+      });
+    });
+  }, [clusteredSourcesResult, fetchNewsDetail, getNewsDetailCacheKey]);
 
   useEffect(() => {
     handleSummarizeAllSources(false);
@@ -743,10 +877,17 @@ export default function HomeScreen() {
       handleSummarizeAllSources(false);
     }, 6 * 60 * 60 * 1000);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [preferredLanguage]);
+
+  useEffect(() => {
+    setSelectedRankedNewsIndex(null);
+    setNewsDetailText('');
+    setNewsDetailError('');
+    setIsNewsDetailLoading(false);
+  }, [language]);
 
   return (
+    <>
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <StatusBar style="auto" />
 
@@ -760,64 +901,18 @@ export default function HomeScreen() {
         <Animated.View style={[styles.backgroundBubble, styles.backgroundBubbleSix, bubbleOneStyle]} />
 
         <View style={styles.heroBlock}>
-          <Text style={styles.title}>Credible Search</Text>
+          <Text style={styles.title}>{isZh ? '可信新闻' : 'Credible Search'}</Text>
           <Text style={styles.subtitle}>
-            Ask once and get clustered viewpoints.
+            {isZh ? '浏览排序新闻，点击任一卡片获取 AI 深度解读。' : 'Browse ranked news and tap any card for deeper AI context.'}
           </Text>
         </View>
 
         <View style={styles.card}>
           <Text style={styles.cardText}>
-            Enter a question to directly generate a source-categorized summary from trusted outlets.
+            {isZh
+              ? '点击下方任一新闻卡片，会发起新的 AI 请求并弹出详情视图。'
+              : 'Tap any ranked news card below to generate deeper context with a fresh AI request.'}
           </Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Example: What are the pros and cons of AI regulation right now?"
-            placeholderTextColor="#888"
-            value={question}
-            onChangeText={setQuestion}
-            multiline
-          />
-          <View style={styles.actionsRow}>
-            <TouchableOpacity style={styles.askButton} onPress={handleCategorize}>
-              <Text style={styles.askButtonText}>Analyze Perspectives</Text>
-            </TouchableOpacity>
-            {canUseVoiceInput ? (
-              <TouchableOpacity
-                style={[styles.micIconButton, isListening ? styles.micIconButtonActive : styles.micIconButtonIdle]}
-                onPress={handleVoiceInput}
-                disabled={isTranscribingVoice}
-              >
-                {isListening ? (
-                  <FaStop size={14} color="#fff" />
-                ) : (
-                  <FaMicrophone size={16} color="#0f172a" />
-                )}
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          {isTranscribingVoice ? (
-            <Text style={styles.voiceInfoText}>Transcribing voice...</Text>
-          ) : null}
-          {voiceError ? <Text style={styles.voiceErrorText}>{voiceError}</Text> : null}
-
-          {submittedQuestion ? (
-            <Text style={styles.statusText}>
-              Submitted: "{submittedQuestion}"
-            </Text>
-          ) : null}
-
-          {isLoading || categorizeError || categorizedResult ? (
-            <View style={styles.answerFrame}>
-              {isLoading ? (
-                <Text style={styles.answerFrameText}>Categorizing...</Text>
-              ) : categorizeError ? (
-                <Text style={styles.answerFrameError}>{categorizeError}</Text>
-              ) : (
-                renderRichText(categorizedResult)
-              )}
-            </View>
-          ) : null}
         </View>
 
         <View style={styles.rankClusterTopWrap}>
@@ -835,7 +930,9 @@ export default function HomeScreen() {
                     isAllSourcesLoading ? styles.bulkActionButtonTextDisabled : null,
                   ]}
                 >
-                  {isAllSourcesLoading ? 'Refreshing Latest Source Highlights...' : 'Discover Latest Highlights'}
+                  {isAllSourcesLoading
+                    ? (isZh ? '正在刷新最新新闻亮点...' : 'Refreshing Latest Source Highlights...')
+                    : (isZh ? '发现最新新闻亮点' : 'Discover Latest Highlights')}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -844,7 +941,9 @@ export default function HomeScreen() {
           {isAllSourcesLoading ? (
             <View style={styles.bulkLoadingWrap}>
               <ActivityIndicator size="small" color="#2563eb" />
-              <Text style={styles.bulkLoadingText}>Fetching sources in parallel and summarizing each source...</Text>
+              <Text style={styles.bulkLoadingText}>
+                {isZh ? '正在并行抓取来源并生成摘要...' : 'Fetching sources in parallel and summarizing each source...'}
+              </Text>
             </View>
           ) : null}
 
@@ -853,13 +952,24 @@ export default function HomeScreen() {
 
           {rankedClusterCards.length > 0 ? (
             <View style={styles.clusterSectionWrap}>
-              <Text style={styles.clusterSectionTitle}>Ranked Source Clusters</Text>
+              <Text style={styles.clusterSectionTitle}>{isZh ? '排序新闻' : 'Ranked News'}</Text>
               {isMobileClusterLayout ? (
                 <View style={styles.clusterCardsColumn}>
                   {rankedClusterCards.map((clusterText, idx) => (
-                    <View key={`ranked-cluster-${idx}`} style={[styles.clusterCard, styles.clusterCardMobile]}>
+                    <TouchableOpacity
+                      key={`ranked-cluster-${idx}`}
+                      style={[
+                        styles.clusterCard,
+                        styles.clusterCardMobile,
+                        selectedRankedNewsIndex === idx ? styles.clusterCardSelected : null,
+                      ]}
+                      onPress={() => handleLearnMoreNews(clusterText, idx)}
+                    >
                       <View style={styles.clusterCardBody}>{renderRichText(clusterText)}</View>
-                    </View>
+                      <View style={styles.clusterLearnMoreButton}>
+                        <Text style={styles.clusterLearnMoreText}>{isZh ? '深入了解' : 'Learn More'}</Text>
+                      </View>
+                    </TouchableOpacity>
                   ))}
                 </View>
               ) : (
@@ -869,9 +979,19 @@ export default function HomeScreen() {
                   contentContainerStyle={styles.clusterCardsRow}
                 >
                   {rankedClusterCards.map((clusterText, idx) => (
-                    <View key={`ranked-cluster-${idx}`} style={styles.clusterCard}>
+                    <TouchableOpacity
+                      key={`ranked-cluster-${idx}`}
+                      style={[
+                        styles.clusterCard,
+                        selectedRankedNewsIndex === idx ? styles.clusterCardSelected : null,
+                      ]}
+                      onPress={() => handleLearnMoreNews(clusterText, idx)}
+                    >
                       <View style={styles.clusterCardBody}>{renderRichText(clusterText)}</View>
-                    </View>
+                      <View style={styles.clusterLearnMoreButton}>
+                        <Text style={styles.clusterLearnMoreText}>{isZh ? '深入了解' : 'Learn More'}</Text>
+                      </View>
+                    </TouchableOpacity>
                   ))}
                 </ScrollView>
               )}
@@ -917,8 +1037,10 @@ export default function HomeScreen() {
             >
               <Text style={styles.sourceSummaryToggleText}>
                 {showSourceSummaries
-                  ? 'Hide Source Summaries'
-                  : `Show Source Summaries (${displayableSourceSummaries.length})`}
+                  ? (isZh ? '隐藏来源摘要' : 'Hide Source Summaries')
+                  : (isZh
+                    ? `显示来源摘要 (${displayableSourceSummaries.length})`
+                    : `Show Source Summaries (${displayableSourceSummaries.length})`)}
               </Text>
             </TouchableOpacity>
 
@@ -938,6 +1060,33 @@ export default function HomeScreen() {
 
       </View>
     </ScrollView>
+    <Modal
+      visible={selectedRankedNewsIndex !== null}
+      transparent
+      animationType="fade"
+      onRequestClose={closeNewsDetailModal}
+    >
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>{isZh ? '新闻详情' : 'News Detail'}</Text>
+            <TouchableOpacity style={styles.modalCloseButton} onPress={closeNewsDetailModal}>
+              <Text style={styles.modalCloseText}>{isZh ? '关闭' : 'Close'}</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.modalBodyScroll} contentContainerStyle={styles.modalBodyContent}>
+            {isNewsDetailLoading ? (
+              <Text style={styles.answerFrameText}>{isZh ? '正在加载深度解读...' : 'Loading deeper context...'}</Text>
+            ) : newsDetailError ? (
+              <Text style={styles.answerFrameError}>{newsDetailError}</Text>
+            ) : (
+              <View style={styles.newsDetailBody}>{renderRichText(newsDetailText)}</View>
+            )}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+    </>
   );
 }
 
@@ -1364,11 +1513,114 @@ const styles = StyleSheet.create({
     shadowRadius: 10,
     elevation: 3,
   },
+  clusterCardSelected: {
+    borderColor: '#60a5fa',
+    shadowColor: '#2563eb',
+    shadowOpacity: 0.14,
+  },
   clusterCardMobile: {
     width: '100%',
   },
   clusterCardBody: {
     gap: 4,
+  },
+  clusterLearnMoreButton: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 8,
+  },
+  clusterLearnMoreText: {
+    color: '#0f766e',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  newsDetailCard: {
+    width: '100%',
+    maxWidth: 760,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    padding: 14,
+    marginTop: 8,
+    marginBottom: 10,
+    shadowColor: '#1d4ed8',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 14,
+    elevation: 3,
+  },
+  newsDetailTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0f172a',
+    marginBottom: 8,
+    letterSpacing: -0.2,
+  },
+  newsDetailBody: {
+    borderTopWidth: 1,
+    borderTopColor: '#e2e8f0',
+    paddingTop: 8,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 20,
+  },
+  modalSheet: {
+    width: '100%',
+    maxWidth: 760,
+    maxHeight: '86%',
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  modalHeader: {
+    minHeight: 54,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+    letterSpacing: -0.2,
+  },
+  modalCloseButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    backgroundColor: '#f8fafc',
+  },
+  modalCloseText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  modalBodyScroll: {
+    width: '100%',
+  },
+  modalBodyContent: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   bulkSummaryList: {
     width: '100%',

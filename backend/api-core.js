@@ -11,6 +11,8 @@ const RATE_LIMIT_MAX_REQUESTS = 10;
 const SOURCE_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
 const SOURCE_WORKFLOW_CACHE_TTL_MS = 7 * 60 * 60 * 1000;
 const SOURCE_WORKFLOW_CACHE_TTL_SEC = Math.floor(SOURCE_WORKFLOW_CACHE_TTL_MS / 1000);
+const ASK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const ASK_CACHE_TTL_SEC = Math.floor(ASK_CACHE_TTL_MS / 1000);
 const METRICS_RECENT_REQUEST_LIMIT = 120;
 const METRICS_RECENT_REFRESH_LIMIT = 120;
 
@@ -64,6 +66,8 @@ const requestLogByIp = new Map();
 const sourceSummaryCache = new Map();
 const sourceWorkflowCache = new Map();
 const sourceWorkflowInFlight = new Map();
+const askCache = new Map();
+const askInFlight = new Map();
 const usageMetrics = {
   startedAt: Date.now(),
   totalRequests: 0,
@@ -662,13 +666,77 @@ async function ask(question) {
     throw new ApiError(400, 'Question is required.');
   }
 
-  ensureApiKey();
-  const responseJson = await postResponsesApi(
-    'Answer clearly and concisely. Keep the answer practical. Do not mention underlying model, vendor, or provider.',
-    normalizedQuestion
-  );
+  const key = getAskCacheKey(normalizedQuestion);
+  const now = Date.now();
+  const redisCached = await getAskFromRedis(key);
+  if (redisCached && now - redisCached.ts < ASK_CACHE_TTL_MS) {
+    return {
+      ...redisCached.value,
+      cache: {
+        hit: true,
+        stale: false,
+        ttlMs: ASK_CACHE_TTL_MS,
+        ageMs: now - redisCached.ts,
+        backend: 'redis',
+      },
+    };
+  }
 
-  return { answer: extractAnswer(responseJson) || 'No answer text returned.' };
+  const cached = askCache.get(key);
+  if (cached && now - cached.ts < ASK_CACHE_TTL_MS) {
+    return {
+      ...cached.value,
+      cache: {
+        hit: true,
+        stale: false,
+        ttlMs: ASK_CACHE_TTL_MS,
+        ageMs: now - cached.ts,
+        backend: 'memory',
+      },
+    };
+  }
+
+  if (askInFlight.has(key)) {
+    const value = await askInFlight.get(key);
+    const current = askCache.get(key);
+    return {
+      ...value,
+      cache: {
+        hit: !!current,
+        stale: false,
+        ttlMs: ASK_CACHE_TTL_MS,
+        ageMs: current ? now - current.ts : 0,
+        backend: 'memory',
+      },
+    };
+  }
+
+  const promise = (async () => {
+    ensureApiKey();
+    const responseJson = await postResponsesApi(
+      'Answer clearly and concisely. Keep the answer practical. Do not mention underlying model, vendor, or provider.',
+      normalizedQuestion
+    );
+    const value = { answer: extractAnswer(responseJson) || 'No answer text returned.' };
+    askCache.set(key, { ts: Date.now(), value });
+    await setAskInRedis(key, value);
+    return value;
+  })().finally(() => {
+    askInFlight.delete(key);
+  });
+
+  askInFlight.set(key, promise);
+  const value = await promise;
+  return {
+    ...value,
+    cache: {
+      hit: Boolean(cached || redisCached),
+      stale: false,
+      ttlMs: ASK_CACHE_TTL_MS,
+      ageMs: 0,
+      backend: isRedisEnabled() ? 'redis+memory' : 'memory',
+    },
+  };
 }
 
 async function categorize({ question, answer, selectedSources }) {
@@ -935,6 +1003,14 @@ function getRedisSourceWorkflowKey(cacheKey) {
   return `${REDIS_KEY_PREFIX}:source-workflow:${hash}`;
 }
 
+function getAskCacheKey(question) {
+  return crypto.createHash('sha256').update(String(question || '').trim()).digest('hex');
+}
+
+function getRedisAskKey(cacheKey) {
+  return `${REDIS_KEY_PREFIX}:ask:${cacheKey}`;
+}
+
 async function redisCommand(command) {
   const response = await fetch(REDIS_REST_URL, {
     method: 'POST',
@@ -983,6 +1059,34 @@ async function setWorkflowInRedis(cacheKey, value) {
     await redisCommand(['SET', redisKey, payload, 'EX', String(SOURCE_WORKFLOW_CACHE_TTL_SEC)]);
   } catch (error) {
     console.warn('Redis write failed, continuing with in-memory cache:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function getAskFromRedis(cacheKey) {
+  if (!isRedisEnabled()) return null;
+  const redisKey = getRedisAskKey(cacheKey);
+  try {
+    const serialized = await redisCommand(['GET', redisKey]);
+    if (typeof serialized !== 'string' || !serialized.trim()) return null;
+    const parsed = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== 'object' || !parsed.value || typeof parsed.ts !== 'number') {
+      return null;
+    }
+    return parsed;
+  } catch (error) {
+    console.warn('Redis ask-cache read failed, falling back to in-memory cache:', error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+async function setAskInRedis(cacheKey, value) {
+  if (!isRedisEnabled()) return;
+  const redisKey = getRedisAskKey(cacheKey);
+  const payload = JSON.stringify({ ts: Date.now(), value });
+  try {
+    await redisCommand(['SET', redisKey, payload, 'EX', String(ASK_CACHE_TTL_SEC)]);
+  } catch (error) {
+    console.warn('Redis ask-cache write failed, continuing with in-memory cache:', error instanceof Error ? error.message : String(error));
   }
 }
 
