@@ -194,6 +194,7 @@ export default function HomeScreen() {
   const sourceAutoScrollRafRef = useRef<number | null>(null);
   const sourceAutoScrollLastTsRef = useRef(0);
   const sourceInteractionTimeoutRef = useRef<any>(null);
+  const workflowRequestSeqRef = useRef(0);
   const waveFlow = useRef(new Animated.Value(0)).current;
   const waveSwell = useRef(new Animated.Value(0)).current;
   const waveDrift = useRef(new Animated.Value(0)).current;
@@ -753,6 +754,7 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
   };
 
   const handleSummarizeAllSources = async (forceRefresh = false) => {
+    const requestSeq = ++workflowRequestSeqRef.current;
     setIsAllSourcesLoading(true);
     setAllSourcesError('');
     setAllSourceSummaries([]);
@@ -799,6 +801,7 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
       if (!res.ok) {
         throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to fetch source workflow.');
       }
+      if (workflowRequestSeqRef.current !== requestSeq) return;
 
       const summaries = Array.isArray(data?.sourceSummaries) ? data.sourceSummaries : [];
       setAllSourceSummaries(summaries);
@@ -820,8 +823,10 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
           (cacheHit ? ' (served from cache)' : ' (fresh refresh)')
       );
     } catch {
+      if (workflowRequestSeqRef.current !== requestSeq) return;
       setAllSourcesError(isZh ? `无法连接 API 服务：${apiBaseUrl}` : `Could not connect to API server at ${apiBaseUrl}.`);
     } finally {
+      if (workflowRequestSeqRef.current !== requestSeq) return;
       setIsAllSourcesLoading(false);
     }
   };
