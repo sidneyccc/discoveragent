@@ -437,12 +437,11 @@ ${isZh ? '用户选中的新闻内容：' : 'Ranked news item selected by user:'
 ${newsItemText}
 
 ${isZh ? '任务：' : 'Task:'}
-${isZh ? '1) 用通俗中文解释这条新闻大意。' : '1) Explain what this item likely refers to in plain language.'}
-${isZh ? '2) 说明关键背景与当前影响。' : '2) Give key context and why it matters now.'}
-${isZh ? '3) 给出 3-6 个可继续追问的问题。' : '3) List 3-6 important follow-up questions the user could ask next.'}
-${isZh ? '4) 明确指出原始内容中的不确定性或歧义。' : '4) Call out uncertainty or ambiguity in the source text.'}
-${isZh ? '5) 输出要简洁、结构化、可执行。' : '5) Keep output concise, structured, and practical.'}
-${isZh ? '6) 必须使用简体中文输出。' : '6) Output must be in English.'}
+${isZh ? '1) 只提供事实性信息，不要提出新问题、建议、观点或洞察。' : '1) Provide factual information only. Do not pose new questions, suggestions, opinions, or insights.'}
+${isZh ? '2) 尽可能详细地补充事件背景、时间线、涉及方、公开数据与已知进展。' : '2) Add as much detail as possible: background, timeline, involved parties, public data, and known developments.'}
+${isZh ? '3) 使用清晰结构输出：概述、关键事实、时间线、当前状态、不确定信息。' : '3) Use a clear structure: overview, key facts, timeline, current status, and uncertainties.'}
+${isZh ? '4) 不要做价值判断，不要提供行动建议。' : '4) Do not make value judgments and do not provide recommendations.'}
+${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.'}
 `.trim();
 
   const getNewsDetailCacheKey = useCallback(

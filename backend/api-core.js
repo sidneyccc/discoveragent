@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
@@ -6,6 +7,12 @@ const OPENAI_TRANSCRIBE_MODEL = process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-
 const REDIS_REST_URL = String(process.env.REDIS_REST_URL || '').trim().replace(/\/+$/, '');
 const REDIS_REST_TOKEN = String(process.env.REDIS_REST_TOKEN || '').trim();
 const REDIS_KEY_PREFIX = String(process.env.REDIS_KEY_PREFIX || 'sidagent').trim() || 'sidagent';
+let PROMPT_SIGNATURE = 'nosig';
+try {
+  PROMPT_SIGNATURE = crypto.createHash('sha256').update(fs.readFileSync(__filename, 'utf8')).digest('hex').slice(0, 16);
+} catch {
+  PROMPT_SIGNATURE = 'nosig';
+}
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
 const SOURCE_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -562,7 +569,7 @@ function ensureApiKey() {
 }
 
 function getSourceSummaryCacheKey({ sourceName, sourceUrl, preferredLanguage }) {
-  return `${String(sourceName || '').trim().toLowerCase()}|${String(sourceUrl || '').trim()}|${String(preferredLanguage || '').trim().toLowerCase()}`;
+  return `${PROMPT_SIGNATURE}|${String(sourceName || '').trim().toLowerCase()}|${String(sourceUrl || '').trim()}|${String(preferredLanguage || '').trim().toLowerCase()}`;
 }
 
 function normalizePreferredLanguage(preferredLanguage) {
@@ -991,7 +998,7 @@ function getSourceWorkflowCacheKey({ sources, preferredLanguage }) {
     .sort()
     .join('||');
   const lang = normalizePreferredLanguage(preferredLanguage);
-  return `${lang}::${normalizedSources}`;
+  return `${PROMPT_SIGNATURE}|${lang}::${normalizedSources}`;
 }
 
 function isRedisEnabled() {
@@ -1004,7 +1011,7 @@ function getRedisSourceWorkflowKey(cacheKey) {
 }
 
 function getAskCacheKey(question) {
-  return crypto.createHash('sha256').update(String(question || '').trim()).digest('hex');
+  return crypto.createHash('sha256').update(`${PROMPT_SIGNATURE}|${String(question || '').trim()}`).digest('hex');
 }
 
 function getRedisAskKey(cacheKey) {
