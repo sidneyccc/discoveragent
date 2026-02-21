@@ -31,14 +31,21 @@ export default function RootLayout() {
           headerShadowVisible: true,
           headerTintColor: '#111827',
           headerTitle: () => (
-            <View style={styles.brandTitleWrap}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Go to homepage"
+              onPress={() => navigateTo('/')}
+              style={styles.brandTitlePressable}
+            >
+              <View style={styles.brandTitleWrap}>
               <View style={styles.brandHalo}>
                 <View style={styles.brandDotOuter}>
                   <View style={styles.brandDotInner} />
                 </View>
               </View>
               <Text style={styles.brandTitle}>SidAgent</Text>
-            </View>
+              </View>
+            </Pressable>
           ),
           headerRight: () => (
             <Pressable
@@ -111,6 +118,11 @@ const styles = StyleSheet.create({
   headerSideSpacer: {
     width: 40,
     height: 40,
+  },
+  brandTitlePressable: {
+    borderRadius: 999,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
   },
   brandTitleWrap: {
     flexDirection: 'row',
