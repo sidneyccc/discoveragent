@@ -45,11 +45,24 @@ Optional env vars for the background refresh:
 For serverless deployment, periodic refresh is handled by Vercel Cron (not `setInterval`):
 
 - Scheduled route: `/api/cron-source-refresh`
-- Schedule: every 30 minutes (`*/30 * * * *`) in `vercel.json`
+- Schedule (Hobby/free): once daily (`0 1 * * *`) in `vercel.json`
 - Auth: set `CRON_SECRET` in Vercel environment variables
 
 Vercel Cron includes `Authorization: Bearer <CRON_SECRET>` automatically.  
 The refresh endpoint validates this token before running.
+
+If you upgrade to Vercel Pro, you can switch back to a higher-frequency schedule (for example every 30 minutes).
+
+### 3.2) Production periodic refresh every 30 minutes on free plan (GitHub Actions)
+
+This repo includes `.github/workflows/cron-source-refresh.yml` to trigger refresh every 30 minutes.
+
+Set these GitHub repository secrets:
+
+- `CRON_SECRET` (must match Vercel `CRON_SECRET`)
+- `CRON_ENDPOINT` (optional, defaults to `https://discoveragent.vercel.app/api/cron-source-refresh`)
+
+You can also trigger it manually from GitHub Actions using `workflow_dispatch`.
 
 ### 4) Optional: enable global Redis cache
 
@@ -88,7 +101,7 @@ This repo is configured for a single Vercel project that serves:
 `vercel.json` defines:
 - `buildCommand`: `npm run build:web`
 - `outputDirectory`: `dist`
-- cron schedule for `/api/cron-source-refresh` every 30 minutes
+- cron schedule for `/api/cron-source-refresh` once daily on Hobby/free
 
 Recommended env vars in Vercel:
 - `OPENAI_API_KEY`

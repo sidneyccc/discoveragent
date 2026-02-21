@@ -1,0 +1,38 @@
+name: Source Refresh Cron
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger source refresh endpoint
+        env:
+          CRON_ENDPOINT: ${{ secrets.CRON_ENDPOINT }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          endpoint="${CRON_ENDPOINT:-https://discoveragent.vercel.app/api/cron-source-refresh}"
+
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET is not set in GitHub repository secrets."
+            exit 1
+          fi
+
+          echo "Calling ${endpoint}"
+          http_code=$(curl -sS -o /tmp/cron-refresh-response.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "User-Agent: discoveragent-github-actions-cron" \
+            "${endpoint}")
+
+          echo "HTTP ${http_code}"
+          cat /tmp/cron-refresh-response.json
+          echo
+
+          if [ "${http_code}" -lt 200 ] || [ "${http_code}" -ge 300 ]; then
+            echo "Cron refresh call failed."
+            exit 1
+          fi
