@@ -78,14 +78,24 @@ npm run build:web
 
 Output is generated in `/dist`.
 
-### Deploy to GitHub Pages
+### Deploy to Vercel (Frontend + API)
 
-- Automatic deploy is configured in `.github/workflows/deploy.yml` on pushes to `main`.
-- Manual deploy is also available:
+This repo is configured for a single Vercel project that serves:
 
-```bash
-npm run deploy
-```
+- frontend static web output from `/dist`
+- serverless API routes from `/api/*.js`
+
+`vercel.json` defines:
+- `buildCommand`: `npm run build:web`
+- `outputDirectory`: `dist`
+- cron schedule for `/api/cron-source-refresh` every 30 minutes
+
+Recommended env vars in Vercel:
+- `OPENAI_API_KEY`
+- `CRON_SECRET`
+- `REDIS_REST_URL` and `REDIS_REST_TOKEN` (optional)
+- `SOURCE_REFRESH_*` values as needed (optional)
+- `EXPO_PUBLIC_API_BASE_URL` can be left unset to use same-origin `/api` calls.
 
 ## Project Structure
 

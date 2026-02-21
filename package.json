@@ -8,9 +8,7 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "build:web": "EXPO_PUBLIC_ROUTER_BASE=/discoveragent expo export --platform web && cp dist/index.html dist/404.html",
-    "predeploy": "npm run build:web",
-    "deploy": "gh-pages -d dist"
+    "build:web": "EXPO_PUBLIC_ROUTER_BASE= expo export --platform web && cp dist/index.html dist/404.html"
   },
   "dependencies": {
     "expo": "~52.0.0",
@@ -29,7 +27,6 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@types/react": "~18.3.12",
-    "gh-pages": "^6.1.1",
     "typescript": "^5.3.3"
   },
   "private": true
