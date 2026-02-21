@@ -1,0 +1,13 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron-source-refresh",
+      "schedule": "*/30 * * * *"
+    }
+  ],
+  "functions": {
+    "api/cron-source-refresh.js": {
+      "maxDuration": 300
+    }
+  }
+}

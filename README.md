@@ -40,6 +40,17 @@ Optional env vars for the background refresh:
 - `SOURCE_REFRESH_LANG`: preferred language passed into source workflow (default: `en-US`)
 - `SOURCE_REFRESH_SOURCES_JSON`: JSON array of `{ "name": "...", "url": "..." }` to override default source list
 
+### 3.1) Production periodic refresh (Vercel)
+
+For serverless deployment, periodic refresh is handled by Vercel Cron (not `setInterval`):
+
+- Scheduled route: `/api/cron-source-refresh`
+- Schedule: every 30 minutes (`*/30 * * * *`) in `vercel.json`
+- Auth: set `CRON_SECRET` in Vercel environment variables
+
+Vercel Cron includes `Authorization: Bearer <CRON_SECRET>` automatically.  
+The refresh endpoint validates this token before running.
+
 ### 4) Optional: enable global Redis cache
 
 The source workflow endpoint supports cross-instance cache via Redis REST (recommended for deployed environments with multiple server instances).
@@ -88,6 +99,7 @@ app/
 api/
   ask.js              Serverless wrapper for Q&A endpoint
   categorize.js       Serverless wrapper for source clustering endpoint
+  cron-source-refresh.js Serverless cron handler for periodic source workflow refresh
   metrics.js          Serverless usage metrics endpoint
   source-workflow.js  Serverless wrapper for all-source summarize + cluster flow
   transcribe.js       Serverless wrapper for transcription endpoint
