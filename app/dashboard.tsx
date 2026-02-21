@@ -40,6 +40,27 @@ type UsageMetrics = {
   };
   endpoints: EndpointMetric[];
   recentRequests: RecentRequestMetric[];
+  refresh?: {
+    totalRuns: number;
+    successRuns: number;
+    failedRuns: number;
+    avgDurationMs: number;
+    lastRunAt: string;
+    lastStatus: string;
+    recentRuns: Array<{
+      ts: string;
+      trigger: string;
+      status: string;
+      sourceCount: number;
+      usableCount: number;
+      failedCount: number;
+      hiddenCount: number;
+      durationMs: number;
+      cacheHit: boolean | null;
+      cacheBackend: string;
+      error: string;
+    }>;
+  };
 };
 
 function formatDuration(seconds: number) {
@@ -56,10 +77,25 @@ function formatPercent(value: number) {
   return `${(Math.max(0, Math.min(1, value)) * 100).toFixed(1)}%`;
 }
 
+function formatTimestamp(isoLike: string) {
+  if (!isoLike) return 'n/a';
+  const ms = Date.parse(isoLike);
+  if (!Number.isFinite(ms)) return isoLike;
+  return new Date(ms).toLocaleString();
+}
+
+function formatHourLabel(isoLike: string) {
+  const ms = Date.parse(isoLike);
+  if (!Number.isFinite(ms)) return '--';
+  const d = new Date(ms);
+  const hour = d.getHours();
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12}${suffix}`;
+}
+
 export default function DashboardScreen() {
   const envApiBaseUrl = (process.env.EXPO_PUBLIC_API_BASE_URL || '').trim();
-  const hasPlaceholderApiBaseUrl =
-    envApiBaseUrl.includes('<your-vercel-project>') || envApiBaseUrl.includes('your-vercel-project');
   const isLocalWebHost =
     Platform.OS === 'web' &&
     typeof window !== 'undefined' &&
@@ -69,14 +105,25 @@ export default function DashboardScreen() {
     typeof window !== 'undefined' &&
     window.location.hostname.endsWith('github.io');
   const localApiBaseUrl = 'http://127.0.0.1:3001';
-  const hostedApiBaseUrl = 'https://discoveragent.vercel.app';
-  const defaultApiBaseUrl = isLocalWebHost ? localApiBaseUrl : isGithubPagesHost ? hostedApiBaseUrl : '';
+  const normalizedEnvApiBaseUrl = envApiBaseUrl.replace(/\/$/, '');
+  const envLooksLocal =
+    normalizedEnvApiBaseUrl.includes('127.0.0.1') ||
+    normalizedEnvApiBaseUrl.includes('localhost') ||
+    normalizedEnvApiBaseUrl.includes('::1');
+  const envLooksPlaceholder =
+    normalizedEnvApiBaseUrl.includes('<your-vercel-project>') ||
+    normalizedEnvApiBaseUrl.includes('your-vercel-project');
+
   const apiBaseUrl = (
     isLocalWebHost
-      ? localApiBaseUrl
-      : hasPlaceholderApiBaseUrl || !envApiBaseUrl
-        ? defaultApiBaseUrl
-        : envApiBaseUrl
+      ? normalizedEnvApiBaseUrl || localApiBaseUrl
+      : isGithubPagesHost
+        ? normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
+          ? normalizedEnvApiBaseUrl
+          : 'https://discoveragent.vercel.app'
+        : normalizedEnvApiBaseUrl && !envLooksLocal && !envLooksPlaceholder
+          ? normalizedEnvApiBaseUrl
+          : ''
   ).replace(/\/$/, '');
 
   const [metrics, setMetrics] = useState<UsageMetrics | null>(null);
@@ -140,6 +187,52 @@ export default function DashboardScreen() {
     };
   }, [metrics]);
 
+  const requestsTimeline = useMemo(() => {
+    const requests = metrics?.recentRequests || [];
+    if (!requests.length) return [];
+    const bucketMap = new Map<string, { label: string; count: number; totalLatencyMs: number }>();
+
+    for (const req of requests) {
+      const ms = Date.parse(req.ts);
+      if (!Number.isFinite(ms)) continue;
+      const d = new Date(ms);
+      d.setMinutes(0, 0, 0);
+      const key = d.toISOString();
+      const current = bucketMap.get(key) || { label: formatHourLabel(key), count: 0, totalLatencyMs: 0 };
+      current.count += 1;
+      current.totalLatencyMs += Math.max(0, Number(req.durationMs || 0));
+      bucketMap.set(key, current);
+    }
+
+    return Array.from(bucketMap.entries())
+      .sort((a, b) => Date.parse(a[0]) - Date.parse(b[0]))
+      .slice(-8)
+      .map(([, item]) => ({ label: item.label, count: item.count }));
+  }, [metrics?.recentRequests]);
+
+  const endpointUsageBars = useMemo(() => {
+    const endpoints = metrics?.endpoints || [];
+    const totalRequests = endpoints.reduce((sum, entry) => sum + (entry.total || 0), 0);
+    return endpoints.slice(0, 6).map((entry) => ({
+      endpoint: entry.endpoint,
+      total: entry.total,
+      pct: totalRequests ? entry.total / totalRequests : 0,
+    }));
+  }, [metrics?.endpoints]);
+
+  const refreshTimeline = useMemo(() => {
+    const runs = metrics?.refresh?.recentRuns || [];
+    if (!runs.length) return [];
+    return runs
+      .slice(0, 10)
+      .reverse()
+      .map((run) => ({
+        label: formatHourLabel(run.ts),
+        durationMs: Math.max(0, Number(run.durationMs || 0)),
+        status: run.status,
+      }));
+  }, [metrics?.refresh?.recentRuns]);
+
   return (
     <ScrollView
       style={styles.container}
@@ -194,9 +287,98 @@ export default function DashboardScreen() {
           </View>
         ) : null}
 
+        {metrics?.refresh ? (
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>News Refresh History</Text>
+            <Text style={styles.endpointMeta}>
+              Last run: {formatTimestamp(metrics.refresh.lastRunAt)} | status: {metrics.refresh.lastStatus || 'unknown'}
+            </Text>
+            <Text style={styles.endpointMeta}>
+              Total runs: {metrics.refresh.totalRuns || 0} | success: {metrics.refresh.successRuns || 0} | failed: {metrics.refresh.failedRuns || 0}
+            </Text>
+            <Text style={styles.endpointMeta}>
+              Avg refresh duration: {Math.round(metrics.refresh.avgDurationMs || 0)} ms
+            </Text>
+
+            {refreshTimeline.length ? (
+              <View style={styles.chartFrame}>
+                <View style={styles.chartBarsRow}>
+                  {refreshTimeline.map((run, idx) => {
+                    const maxDuration = Math.max(...refreshTimeline.map((item) => item.durationMs), 1);
+                    const height = Math.max(8, Math.round((run.durationMs / maxDuration) * 92));
+                    return (
+                      <View key={`${run.label}-${idx}`} style={styles.chartBarWrap}>
+                        <View
+                          style={[
+                            styles.chartBar,
+                            run.status === 'success' ? styles.chartBarSuccess : styles.chartBarFailed,
+                            { height },
+                          ]}
+                        />
+                        <Text style={styles.chartBarLabel}>{run.label}</Text>
+                        <Text style={styles.chartBarValue}>{Math.round(run.durationMs)}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
+
+            {metrics.refresh.recentRuns?.length ? (
+              <View style={styles.refreshRunsWrap}>
+                {metrics.refresh.recentRuns.slice(0, 10).map((run, idx) => (
+                  <View key={`${run.ts}-${idx}`} style={styles.recentRow}>
+                    <Text style={styles.recentText}>
+                      {run.status.toUpperCase()} | {run.trigger}
+                    </Text>
+                    <Text style={styles.recentMeta}>
+                      {formatTimestamp(run.ts)} | {run.usableCount}/{run.sourceCount} usable | {Math.round(run.durationMs)} ms
+                    </Text>
+                    {run.error ? <Text style={styles.recentMeta}>error: {run.error}</Text> : null}
+                  </View>
+                ))}
+              </View>
+            ) : null}
+          </View>
+        ) : null}
+
+        {requestsTimeline.length ? (
+          <View style={styles.panel}>
+            <Text style={styles.panelTitle}>Request Timeline (Recent Hours)</Text>
+            <View style={styles.chartFrame}>
+              <View style={styles.chartBarsRow}>
+                {requestsTimeline.map((bucket, idx) => {
+                  const maxCount = Math.max(...requestsTimeline.map((b) => b.count), 1);
+                  const height = Math.max(8, Math.round((bucket.count / maxCount) * 92));
+                  return (
+                    <View key={`${bucket.label}-${idx}`} style={styles.chartBarWrap}>
+                      <View style={[styles.chartBar, { height }]} />
+                      <Text style={styles.chartBarLabel}>{bucket.label}</Text>
+                      <Text style={styles.chartBarValue}>{bucket.count}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+        ) : null}
+
         {metrics?.endpoints?.length ? (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>Endpoint Breakdown</Text>
+            <View style={styles.endpointBarsWrap}>
+              {endpointUsageBars.map((item) => (
+                <View key={item.endpoint} style={styles.endpointBarRow}>
+                  <View style={styles.endpointBarHeader}>
+                    <Text style={styles.endpointBarTitle}>{item.endpoint}</Text>
+                    <Text style={styles.endpointBarValue}>{item.total} req</Text>
+                  </View>
+                  <View style={styles.endpointBarTrack}>
+                    <View style={[styles.endpointBarFill, { width: `${Math.max(4, item.pct * 100)}%` }]} />
+                  </View>
+                </View>
+              ))}
+            </View>
             {metrics.endpoints.map((endpoint) => (
               <View key={`${endpoint.method}:${endpoint.endpoint}`} style={styles.endpointRow}>
                 <View style={styles.endpointTopLine}>
@@ -338,6 +520,84 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 16,
   },
+  endpointBarsWrap: {
+    gap: 8,
+  },
+  endpointBarRow: {
+    gap: 4,
+  },
+  endpointBarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  endpointBarTitle: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  endpointBarValue: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  endpointBarTrack: {
+    width: '100%',
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#e2e8f0',
+    overflow: 'hidden',
+  },
+  endpointBarFill: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: '#3b82f6',
+  },
+  chartFrame: {
+    width: '100%',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
+    backgroundColor: '#f8fafc',
+  },
+  chartBarsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 6,
+    minHeight: 132,
+  },
+  chartBarWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 3,
+  },
+  chartBar: {
+    width: '100%',
+    maxWidth: 24,
+    borderRadius: 6,
+    backgroundColor: '#2563eb',
+  },
+  chartBarSuccess: {
+    backgroundColor: '#0f766e',
+  },
+  chartBarFailed: {
+    backgroundColor: '#dc2626',
+  },
+  chartBarLabel: {
+    color: '#64748b',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  chartBarValue: {
+    color: '#111827',
+    fontSize: 10,
+    fontWeight: '700',
+  },
   recentRow: {
     paddingBottom: 8,
     borderBottomWidth: 1,
@@ -352,6 +612,9 @@ const styles = StyleSheet.create({
     marginTop: 4,
     color: '#64748b',
     fontSize: 12,
+  },
+  refreshRunsWrap: {
+    gap: 8,
   },
   loadingCard: {
     flexDirection: 'row',

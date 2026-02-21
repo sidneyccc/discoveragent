@@ -11,6 +11,8 @@ const RATE_LIMIT_MAX_REQUESTS = 10;
 const SOURCE_SUMMARY_CACHE_TTL_MS = 10 * 60 * 1000;
 const SOURCE_WORKFLOW_CACHE_TTL_MS = 7 * 60 * 60 * 1000;
 const SOURCE_WORKFLOW_CACHE_TTL_SEC = Math.floor(SOURCE_WORKFLOW_CACHE_TTL_MS / 1000);
+const METRICS_RECENT_REQUEST_LIMIT = 120;
+const METRICS_RECENT_REFRESH_LIMIT = 120;
 
 const TRUSTED_SOURCES = [
   'Reuters',
@@ -70,6 +72,15 @@ const usageMetrics = {
   totalLatencyMs: 0,
   endpointStats: new Map(),
   recentRequests: [],
+  refreshStats: {
+    totalRuns: 0,
+    successRuns: 0,
+    failedRuns: 0,
+    totalDurationMs: 0,
+    lastRunAt: '',
+    lastStatus: '',
+  },
+  recentRefreshRuns: [],
 };
 
 class ApiError extends Error {
@@ -151,12 +162,136 @@ function enforceRateLimit(ip) {
   }
 }
 
+function getRedisMetricsTotalsKey() {
+  return `${REDIS_KEY_PREFIX}:metrics:totals`;
+}
+
+function getRedisMetricsEndpointSetKey() {
+  return `${REDIS_KEY_PREFIX}:metrics:endpoints`;
+}
+
+function getRedisMetricsEndpointKey(endpointId) {
+  return `${REDIS_KEY_PREFIX}:metrics:endpoint:${endpointId}`;
+}
+
+function getRedisMetricsRecentRequestsKey() {
+  return `${REDIS_KEY_PREFIX}:metrics:recent-requests`;
+}
+
+function getRedisRefreshSummaryKey() {
+  return `${REDIS_KEY_PREFIX}:metrics:refresh:summary`;
+}
+
+function getRedisRefreshRecentKey() {
+  return `${REDIS_KEY_PREFIX}:metrics:refresh:recent`;
+}
+
+function toRedisEndpointId(endpoint, method) {
+  return crypto.createHash('sha1').update(`${method}|${endpoint}`).digest('hex');
+}
+
+function parseRedisHash(raw) {
+  if (!raw) return {};
+  if (Array.isArray(raw)) {
+    const out = {};
+    for (let i = 0; i < raw.length; i += 2) {
+      const key = raw[i];
+      const value = raw[i + 1];
+      if (typeof key === 'string') out[key] = value;
+    }
+    return out;
+  }
+  if (typeof raw === 'object') return raw;
+  return {};
+}
+
+function parseNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+async function persistApiUsageToRedis({ endpointKey, methodLabel, status, latency, nowIso, cacheHit, cacheBackend }) {
+  if (!isRedisEnabled()) return;
+  const endpointId = toRedisEndpointId(endpointKey, methodLabel);
+  const totalsKey = getRedisMetricsTotalsKey();
+  const endpointSetKey = getRedisMetricsEndpointSetKey();
+  const endpointRedisKey = getRedisMetricsEndpointKey(endpointId);
+  const recentRequestsKey = getRedisMetricsRecentRequestsKey();
+
+  try {
+    await redisCommand(['HSETNX', totalsKey, 'startedAt', nowIso]);
+    await redisCommand(['HINCRBY', totalsKey, 'totalRequests', '1']);
+    await redisCommand(['HINCRBY', totalsKey, 'totalLatencyMs', String(latency)]);
+    if (status >= 200 && status < 400) {
+      await redisCommand(['HINCRBY', totalsKey, 'successRequests', '1']);
+    } else {
+      await redisCommand(['HINCRBY', totalsKey, 'errorRequests', '1']);
+    }
+
+    await redisCommand(['SADD', endpointSetKey, endpointId]);
+    await redisCommand([
+      'HSET',
+      endpointRedisKey,
+      'endpoint',
+      endpointKey,
+      'method',
+      methodLabel,
+      'lastSeenAt',
+      nowIso,
+    ]);
+    await redisCommand(['HINCRBY', endpointRedisKey, 'total', '1']);
+    await redisCommand(['HINCRBY', endpointRedisKey, 'totalLatencyMs', String(latency)]);
+
+    if (status >= 200 && status < 300) await redisCommand(['HINCRBY', endpointRedisKey, 'status2xx', '1']);
+    if (status >= 400 && status < 500) await redisCommand(['HINCRBY', endpointRedisKey, 'status4xx', '1']);
+    if (status >= 500) await redisCommand(['HINCRBY', endpointRedisKey, 'status5xx', '1']);
+    if (status === 429) await redisCommand(['HINCRBY', endpointRedisKey, 'rateLimited', '1']);
+    if (status >= 200 && status < 400) await redisCommand(['HINCRBY', endpointRedisKey, 'success', '1']);
+    if (status >= 400) await redisCommand(['HINCRBY', endpointRedisKey, 'errors', '1']);
+    if (typeof cacheHit === 'boolean') {
+      await redisCommand(['HINCRBY', endpointRedisKey, cacheHit ? 'cacheHits' : 'cacheMisses', '1']);
+    }
+
+    const recentPayload = JSON.stringify({
+      ts: nowIso,
+      endpoint: endpointKey,
+      method: methodLabel,
+      statusCode: status,
+      durationMs: latency,
+      cacheHit: typeof cacheHit === 'boolean' ? cacheHit : null,
+      cacheBackend: typeof cacheBackend === 'string' && cacheBackend ? cacheBackend : '',
+    });
+    await redisCommand(['RPUSH', recentRequestsKey, recentPayload]);
+    await redisCommand(['LTRIM', recentRequestsKey, String(-METRICS_RECENT_REQUEST_LIMIT), '-1']);
+  } catch (error) {
+    console.warn('Redis metrics write failed, continuing with in-memory metrics:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function persistRefreshUsageToRedis(refreshEntry) {
+  if (!isRedisEnabled()) return;
+  const summaryKey = getRedisRefreshSummaryKey();
+  const recentKey = getRedisRefreshRecentKey();
+  try {
+    await redisCommand(['HSETNX', summaryKey, 'startedAt', refreshEntry.ts]);
+    await redisCommand(['HINCRBY', summaryKey, 'totalRuns', '1']);
+    await redisCommand(['HINCRBY', summaryKey, refreshEntry.status === 'success' ? 'successRuns' : 'failedRuns', '1']);
+    await redisCommand(['HINCRBY', summaryKey, 'totalDurationMs', String(refreshEntry.durationMs)]);
+    await redisCommand(['HSET', summaryKey, 'lastRunAt', refreshEntry.ts, 'lastStatus', refreshEntry.status]);
+    await redisCommand(['RPUSH', recentKey, JSON.stringify(refreshEntry)]);
+    await redisCommand(['LTRIM', recentKey, String(-METRICS_RECENT_REFRESH_LIMIT), '-1']);
+  } catch (error) {
+    console.warn('Redis refresh metrics write failed, continuing with in-memory metrics:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 function recordApiUsage({ endpoint, method = 'POST', statusCode, durationMs = 0, cacheHit, cacheBackend }) {
   const endpointKey = String(endpoint || 'unknown').trim() || 'unknown';
   const methodLabel = String(method || 'POST').trim().toUpperCase() || 'POST';
   const status = Number(statusCode || 0);
   const latency = Math.max(0, Number(durationMs || 0));
   const nowIso = new Date().toISOString();
+  const endpointMetricMapKey = `${methodLabel} ${endpointKey}`;
 
   usageMetrics.totalRequests += 1;
   usageMetrics.totalLatencyMs += latency;
@@ -166,7 +301,7 @@ function recordApiUsage({ endpoint, method = 'POST', statusCode, durationMs = 0,
     usageMetrics.errorRequests += 1;
   }
 
-  const endpointCurrent = usageMetrics.endpointStats.get(endpointKey) || {
+  const endpointCurrent = usageMetrics.endpointStats.get(endpointMetricMapKey) || {
     endpoint: endpointKey,
     method: methodLabel,
     total: 0,
@@ -197,7 +332,7 @@ function recordApiUsage({ endpoint, method = 'POST', statusCode, durationMs = 0,
     else endpointCurrent.cacheMisses += 1;
   }
 
-  usageMetrics.endpointStats.set(endpointKey, endpointCurrent);
+  usageMetrics.endpointStats.set(endpointMetricMapKey, endpointCurrent);
 
   usageMetrics.recentRequests.push({
     ts: nowIso,
@@ -208,16 +343,71 @@ function recordApiUsage({ endpoint, method = 'POST', statusCode, durationMs = 0,
     cacheHit: typeof cacheHit === 'boolean' ? cacheHit : null,
     cacheBackend: typeof cacheBackend === 'string' && cacheBackend ? cacheBackend : '',
   });
-  if (usageMetrics.recentRequests.length > 120) {
-    usageMetrics.recentRequests.splice(0, usageMetrics.recentRequests.length - 120);
+  if (usageMetrics.recentRequests.length > METRICS_RECENT_REQUEST_LIMIT) {
+    usageMetrics.recentRequests.splice(0, usageMetrics.recentRequests.length - METRICS_RECENT_REQUEST_LIMIT);
   }
+
+  void persistApiUsageToRedis({
+    endpointKey,
+    methodLabel,
+    status,
+    latency,
+    nowIso,
+    cacheHit,
+    cacheBackend,
+  });
 }
 
-function getUsageMetricsSnapshot() {
+function recordSourceRefreshRun({
+  trigger = 'workflow',
+  status = 'success',
+  sourceCount = 0,
+  usableCount = 0,
+  failedCount = 0,
+  hiddenCount = 0,
+  durationMs = 0,
+  cacheHit = null,
+  cacheBackend = '',
+  error = '',
+}) {
+  const ts = new Date().toISOString();
+  const entry = {
+    ts,
+    trigger: String(trigger || 'workflow'),
+    status: String(status || 'success'),
+    sourceCount: Math.max(0, Number(sourceCount || 0)),
+    usableCount: Math.max(0, Number(usableCount || 0)),
+    failedCount: Math.max(0, Number(failedCount || 0)),
+    hiddenCount: Math.max(0, Number(hiddenCount || 0)),
+    durationMs: Math.max(0, Number(durationMs || 0)),
+    cacheHit: typeof cacheHit === 'boolean' ? cacheHit : null,
+    cacheBackend: typeof cacheBackend === 'string' ? cacheBackend : '',
+    error: typeof error === 'string' ? error : '',
+  };
+
+  usageMetrics.refreshStats.totalRuns += 1;
+  usageMetrics.refreshStats.totalDurationMs += entry.durationMs;
+  if (entry.status === 'success') usageMetrics.refreshStats.successRuns += 1;
+  else usageMetrics.refreshStats.failedRuns += 1;
+  usageMetrics.refreshStats.lastRunAt = entry.ts;
+  usageMetrics.refreshStats.lastStatus = entry.status;
+
+  usageMetrics.recentRefreshRuns.push(entry);
+  if (usageMetrics.recentRefreshRuns.length > METRICS_RECENT_REFRESH_LIMIT) {
+    usageMetrics.recentRefreshRuns.splice(0, usageMetrics.recentRefreshRuns.length - METRICS_RECENT_REFRESH_LIMIT);
+  }
+
+  void persistRefreshUsageToRedis(entry);
+}
+
+function getUsageMetricsSnapshotFromMemory() {
   const total = usageMetrics.totalRequests;
   const successRate = total ? usageMetrics.successRequests / total : 0;
   const avgLatencyMs = total ? usageMetrics.totalLatencyMs / total : 0;
   const now = Date.now();
+  const refreshAvgDurationMs = usageMetrics.refreshStats.totalRuns
+    ? usageMetrics.refreshStats.totalDurationMs / usageMetrics.refreshStats.totalRuns
+    : 0;
 
   const endpoints = Array.from(usageMetrics.endpointStats.values())
     .map((entry) => ({
@@ -239,7 +429,126 @@ function getUsageMetricsSnapshot() {
     },
     endpoints,
     recentRequests: usageMetrics.recentRequests.slice(-30).reverse(),
+    refresh: {
+      totalRuns: usageMetrics.refreshStats.totalRuns,
+      successRuns: usageMetrics.refreshStats.successRuns,
+      failedRuns: usageMetrics.refreshStats.failedRuns,
+      avgDurationMs: refreshAvgDurationMs,
+      lastRunAt: usageMetrics.refreshStats.lastRunAt,
+      lastStatus: usageMetrics.refreshStats.lastStatus || 'unknown',
+      recentRuns: usageMetrics.recentRefreshRuns.slice(-20).reverse(),
+    },
   };
+}
+
+async function getUsageMetricsSnapshotFromRedis() {
+  if (!isRedisEnabled()) return null;
+  try {
+    const totalsHash = parseRedisHash(await redisCommand(['HGETALL', getRedisMetricsTotalsKey()]));
+    const startedAtRaw = typeof totalsHash.startedAt === 'string' ? totalsHash.startedAt : '';
+    if (!startedAtRaw) return null;
+
+    const endpointIdsRaw = await redisCommand(['SMEMBERS', getRedisMetricsEndpointSetKey()]);
+    const endpointIds = Array.isArray(endpointIdsRaw)
+      ? endpointIdsRaw.filter((id) => typeof id === 'string' && id)
+      : [];
+
+    const endpointHashes = await Promise.all(
+      endpointIds.map((endpointId) => redisCommand(['HGETALL', getRedisMetricsEndpointKey(endpointId)]))
+    );
+    const endpoints = endpointHashes
+      .map((raw) => parseRedisHash(raw))
+      .map((entry) => {
+        const total = parseNumber(entry.total, 0);
+        const totalLatencyMs = parseNumber(entry.totalLatencyMs, 0);
+        return {
+          endpoint: String(entry.endpoint || 'unknown'),
+          method: String(entry.method || 'POST').toUpperCase(),
+          total,
+          success: parseNumber(entry.success, 0),
+          errors: parseNumber(entry.errors, 0),
+          status2xx: parseNumber(entry.status2xx, 0),
+          status4xx: parseNumber(entry.status4xx, 0),
+          status5xx: parseNumber(entry.status5xx, 0),
+          rateLimited: parseNumber(entry.rateLimited, 0),
+          cacheHits: parseNumber(entry.cacheHits, 0),
+          cacheMisses: parseNumber(entry.cacheMisses, 0),
+          totalLatencyMs,
+          avgLatencyMs: total ? totalLatencyMs / total : 0,
+          lastSeenAt: String(entry.lastSeenAt || ''),
+        };
+      })
+      .sort((a, b) => b.total - a.total);
+
+    const recentRequestsRaw = await redisCommand(['LRANGE', getRedisMetricsRecentRequestsKey(), '-30', '-1']);
+    const recentRequests = (Array.isArray(recentRequestsRaw) ? recentRequestsRaw : [])
+      .map((raw) => {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      })
+      .filter((item) => item && typeof item === 'object')
+      .reverse();
+
+    const refreshSummaryHash = parseRedisHash(await redisCommand(['HGETALL', getRedisRefreshSummaryKey()]));
+    const refreshTotalRuns = parseNumber(refreshSummaryHash.totalRuns, 0);
+    const refreshAvgDurationMs = refreshTotalRuns
+      ? parseNumber(refreshSummaryHash.totalDurationMs, 0) / refreshTotalRuns
+      : 0;
+    const refreshRecentRaw = await redisCommand(['LRANGE', getRedisRefreshRecentKey(), '-20', '-1']);
+    const refreshRecentRuns = (Array.isArray(refreshRecentRaw) ? refreshRecentRaw : [])
+      .map((raw) => {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      })
+      .filter((item) => item && typeof item === 'object')
+      .reverse();
+
+    const startedAtMs = Date.parse(startedAtRaw);
+    const now = Date.now();
+    const totalRequests = parseNumber(totalsHash.totalRequests, 0);
+    const successRequests = parseNumber(totalsHash.successRequests, 0);
+    const errorRequests = parseNumber(totalsHash.errorRequests, 0);
+    const totalLatencyMs = parseNumber(totalsHash.totalLatencyMs, 0);
+
+    return {
+      generatedAt: new Date(now).toISOString(),
+      startedAt: Number.isFinite(startedAtMs) ? new Date(startedAtMs).toISOString() : new Date(now).toISOString(),
+      uptimeSec: Number.isFinite(startedAtMs) ? Math.max(0, Math.floor((now - startedAtMs) / 1000)) : 0,
+      totals: {
+        requests: totalRequests,
+        successRequests,
+        errorRequests,
+        successRate: totalRequests ? successRequests / totalRequests : 0,
+        avgLatencyMs: totalRequests ? totalLatencyMs / totalRequests : 0,
+      },
+      endpoints,
+      recentRequests,
+      refresh: {
+        totalRuns: refreshTotalRuns,
+        successRuns: parseNumber(refreshSummaryHash.successRuns, 0),
+        failedRuns: parseNumber(refreshSummaryHash.failedRuns, 0),
+        avgDurationMs: refreshAvgDurationMs,
+        lastRunAt: String(refreshSummaryHash.lastRunAt || ''),
+        lastStatus: String(refreshSummaryHash.lastStatus || 'unknown'),
+        recentRuns: refreshRecentRuns,
+      },
+    };
+  } catch (error) {
+    console.warn('Redis metrics read failed, falling back to in-memory metrics:', error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+async function getUsageMetricsSnapshot() {
+  const redisSnapshot = await getUsageMetricsSnapshotFromRedis();
+  if (redisSnapshot) return redisSnapshot;
+  return getUsageMetricsSnapshotFromMemory();
 }
 
 function ensureApiKey() {
@@ -678,66 +987,89 @@ async function setWorkflowInRedis(cacheKey, value) {
 }
 
 async function runSourceWorkflow({ sources, preferredLanguage }) {
+  const startedAt = Date.now();
   const sourceList = Array.isArray(sources) ? sources : [];
   if (!sourceList.length) {
     throw new ApiError(400, 'At least one source is required.');
   }
 
-  const sourceSummaries = await Promise.all(
-    sourceList.map(async (source) => {
-      try {
-        const result = await summarizeSource({
-          sourceName: source.name,
-          sourceUrl: source.url,
-          preferredLanguage,
-        });
+  try {
+    const sourceSummaries = await Promise.all(
+      sourceList.map(async (source) => {
+        try {
+          const result = await summarizeSource({
+            sourceName: source.name,
+            sourceUrl: source.url,
+            preferredLanguage,
+          });
 
-        return {
-          name: String(source.name || '').trim(),
-          url: String(source.url || '').trim(),
-          summary: result.summary || '',
-          error: '',
-          isDisplayable: result.isDisplayable !== false,
-          unusableReason: result.unusableReason || '',
-        };
-      } catch (error) {
-        return {
-          name: String(source.name || '').trim(),
-          url: String(source.url || '').trim(),
-          summary: '',
-          error: error instanceof Error ? error.message : 'Failed to summarize source.',
-          isDisplayable: false,
-          unusableReason: '',
-        };
-      }
-    })
-  );
+          return {
+            name: String(source.name || '').trim(),
+            url: String(source.url || '').trim(),
+            summary: result.summary || '',
+            error: '',
+            isDisplayable: result.isDisplayable !== false,
+            unusableReason: result.unusableReason || '',
+          };
+        } catch (error) {
+          return {
+            name: String(source.name || '').trim(),
+            url: String(source.url || '').trim(),
+            summary: '',
+            error: error instanceof Error ? error.message : 'Failed to summarize source.',
+            isDisplayable: false,
+            unusableReason: '',
+          };
+        }
+      })
+    );
 
-  const usable = sourceSummaries.filter((s) => !s.error && s.summary && s.isDisplayable !== false);
-  const failedCount = sourceSummaries.filter((s) => s.error).length;
-  const hiddenCount = sourceSummaries.filter((s) => !s.error && s.isDisplayable === false).length;
+    const usable = sourceSummaries.filter((s) => !s.error && s.summary && s.isDisplayable !== false);
+    const failedCount = sourceSummaries.filter((s) => s.error).length;
+    const hiddenCount = sourceSummaries.filter((s) => !s.error && s.isDisplayable === false).length;
 
-  let clustered = '';
-  if (usable.length) {
-    const clusteredRes = await categorizeSourceSummaries({
-      sourceSummaries: usable.map((s) => ({ name: s.name, url: s.url, summary: s.summary })),
-      preferredLanguage,
+    let clustered = '';
+    if (usable.length) {
+      const clusteredRes = await categorizeSourceSummaries({
+        sourceSummaries: usable.map((s) => ({ name: s.name, url: s.url, summary: s.summary })),
+        preferredLanguage,
+      });
+      clustered = clusteredRes.clustered || '';
+    }
+
+    const result = {
+      sourceSummaries,
+      clustered,
+      meta: {
+        totalSources: sourceSummaries.length,
+        fetchedCount: sourceSummaries.length - failedCount,
+        failedCount,
+        hiddenCount,
+        usableCount: usable.length,
+      },
+      generatedAt: new Date().toISOString(),
+    };
+
+    recordSourceRefreshRun({
+      trigger: 'source-workflow',
+      status: 'success',
+      sourceCount: result.meta.totalSources,
+      usableCount: result.meta.usableCount,
+      failedCount: result.meta.failedCount,
+      hiddenCount: result.meta.hiddenCount,
+      durationMs: Date.now() - startedAt,
     });
-    clustered = clusteredRes.clustered || '';
+    return result;
+  } catch (error) {
+    recordSourceRefreshRun({
+      trigger: 'source-workflow',
+      status: 'failed',
+      sourceCount: sourceList.length,
+      durationMs: Date.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
   }
-
-  return {
-    sourceSummaries,
-    clustered,
-    meta: {
-      totalSources: sourceSummaries.length,
-      fetchedCount: sourceSummaries.length - failedCount,
-      failedCount,
-      hiddenCount,
-      usableCount: usable.length,
-    },
-    generatedAt: new Date().toISOString(),
-  };
 }
 
 async function getSourceWorkflow({ sources, preferredLanguage, forceRefresh = false }) {

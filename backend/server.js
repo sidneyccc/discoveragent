@@ -272,43 +272,44 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'GET' && req.url === '/api/metrics') {
     const startTs = Date.now();
-    try {
-      const ip = getClientIpFromReq(req);
-      enforceRateLimit(ip);
-      const payload = getUsageMetricsSnapshot();
-      recordApiUsage({
-        endpoint: '/api/metrics',
-        method: req.method,
-        statusCode: 200,
-        durationMs: Date.now() - startTs,
-      });
-      sendJson(res, 200, payload);
-      return;
-    } catch (error) {
-      if (error instanceof ApiError) {
-        const headers = error.statusCode === 429 && error.details ? { 'Retry-After': error.details } : {};
+    (async () => {
+      try {
+        const ip = getClientIpFromReq(req);
+        enforceRateLimit(ip);
+        const payload = await getUsageMetricsSnapshot();
         recordApiUsage({
           endpoint: '/api/metrics',
           method: req.method,
-          statusCode: error.statusCode,
+          statusCode: 200,
           durationMs: Date.now() - startTs,
         });
-        sendJson(res, error.statusCode, { error: error.message }, headers);
-        return;
-      }
+        sendJson(res, 200, payload);
+      } catch (error) {
+        if (error instanceof ApiError) {
+          const headers = error.statusCode === 429 && error.details ? { 'Retry-After': error.details } : {};
+          recordApiUsage({
+            endpoint: '/api/metrics',
+            method: req.method,
+            statusCode: error.statusCode,
+            durationMs: Date.now() - startTs,
+          });
+          sendJson(res, error.statusCode, { error: error.message }, headers);
+          return;
+        }
 
-      recordApiUsage({
-        endpoint: '/api/metrics',
-        method: req.method,
-        statusCode: 500,
-        durationMs: Date.now() - startTs,
-      });
-      sendJson(res, 500, {
-        error: 'Unexpected metrics server error.',
-        details: error instanceof Error ? error.message : String(error),
-      });
-      return;
-    }
+        recordApiUsage({
+          endpoint: '/api/metrics',
+          method: req.method,
+          statusCode: 500,
+          durationMs: Date.now() - startTs,
+        });
+        sendJson(res, 500, {
+          error: 'Unexpected metrics server error.',
+          details: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+    return;
   }
 
   sendJson(res, 404, { error: 'Not found.' });

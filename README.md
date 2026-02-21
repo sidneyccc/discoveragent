@@ -75,6 +75,7 @@ Add these env vars:
 - `REDIS_KEY_PREFIX`: optional key namespace (default: `sidagent`)
 
 If Redis is not configured, the API automatically falls back to in-memory cache.
+For persistent dashboard analytics across deployments/restarts, configure Redis (`REDIS_REST_URL` + `REDIS_REST_TOKEN`).
 
 ## Product and Design Docs
 

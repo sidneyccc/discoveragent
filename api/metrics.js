@@ -24,7 +24,7 @@ module.exports = async function handler(req, res) {
     const ip = getClientIpFromReq(req);
     enforceRateLimit(ip);
 
-    const payload = getUsageMetricsSnapshot();
+    const payload = await getUsageMetricsSnapshot();
     recordApiUsage({ endpoint, method: req.method, statusCode: 200, durationMs: Date.now() - startTs });
     return res.status(200).json(payload);
   } catch (error) {
