@@ -16,6 +16,95 @@ const {
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3001);
+const SOURCE_REFRESH_ENABLED = String(process.env.SOURCE_REFRESH_ENABLED || 'true').trim().toLowerCase() !== 'false';
+const SOURCE_REFRESH_ON_START = String(process.env.SOURCE_REFRESH_ON_START || 'true').trim().toLowerCase() !== 'false';
+const SOURCE_REFRESH_INTERVAL_MS = Math.max(
+  60 * 1000,
+  Number(process.env.SOURCE_REFRESH_INTERVAL_MS || 30 * 60 * 1000)
+);
+const SOURCE_REFRESH_FORCE = String(process.env.SOURCE_REFRESH_FORCE || 'true').trim().toLowerCase() === 'true';
+const SOURCE_REFRESH_LANG = String(process.env.SOURCE_REFRESH_LANG || 'en-US').trim();
+const DEFAULT_PERIODIC_SOURCES = [
+  { name: 'Reuters', url: 'https://www.reuters.com' },
+  { name: 'AP News', url: 'https://apnews.com' },
+  { name: 'BBC', url: 'https://www.bbc.com/news' },
+  { name: 'NPR', url: 'https://www.npr.org' },
+  { name: 'Weibo', url: 'https://weibo.com' },
+  { name: 'CNN', url: 'https://www.cnn.com' },
+  { name: '网易', url: 'https://www.163.com' },
+  { name: 'CCTV', url: 'https://english.cctv.com' },
+  { name: 'Hacker News', url: 'https://news.ycombinator.com' },
+  { name: 'Reddit', url: 'https://www.reddit.com' },
+];
+
+function parseRefreshSourcesFromEnv() {
+  const raw = String(process.env.SOURCE_REFRESH_SOURCES_JSON || '').trim();
+  if (!raw) return DEFAULT_PERIODIC_SOURCES;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return DEFAULT_PERIODIC_SOURCES;
+    const normalized = parsed
+      .filter((entry) => entry && typeof entry.name === 'string' && typeof entry.url === 'string')
+      .map((entry) => ({ name: entry.name.trim(), url: entry.url.trim() }))
+      .filter((entry) => entry.name && entry.url);
+    return normalized.length ? normalized : DEFAULT_PERIODIC_SOURCES;
+  } catch (error) {
+    console.warn('Failed to parse SOURCE_REFRESH_SOURCES_JSON. Falling back to defaults.', error);
+    return DEFAULT_PERIODIC_SOURCES;
+  }
+}
+
+const SOURCE_REFRESH_SOURCES = parseRefreshSourcesFromEnv();
+let refreshTimer = null;
+let refreshInProgress = false;
+
+async function runPeriodicSourceRefresh(trigger) {
+  if (!SOURCE_REFRESH_ENABLED) return;
+  if (refreshInProgress) {
+    console.log(`[source-refresh] Skipping ${trigger} run because a refresh is already in progress.`);
+    return;
+  }
+
+  refreshInProgress = true;
+  const startedAt = Date.now();
+  try {
+    const payload = await getSourceWorkflow({
+      sources: SOURCE_REFRESH_SOURCES,
+      preferredLanguage: SOURCE_REFRESH_LANG,
+      forceRefresh: SOURCE_REFRESH_FORCE,
+    });
+    const usableCount = Number(payload?.meta?.usableCount || 0);
+    const totalSources = Number(payload?.meta?.totalSources || SOURCE_REFRESH_SOURCES.length);
+    const cacheBackend = typeof payload?.cache?.backend === 'string' ? payload.cache.backend : 'memory';
+    console.log(
+      `[source-refresh] ${trigger} run complete in ${Date.now() - startedAt}ms. usable=${usableCount}/${totalSources}, cache=${cacheBackend}`
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[source-refresh] ${trigger} run failed: ${message}`);
+  } finally {
+    refreshInProgress = false;
+  }
+}
+
+function schedulePeriodicSourceRefresh() {
+  if (!SOURCE_REFRESH_ENABLED) {
+    console.log('[source-refresh] Disabled by SOURCE_REFRESH_ENABLED=false');
+    return;
+  }
+
+  console.log(
+    `[source-refresh] Enabled. intervalMs=${SOURCE_REFRESH_INTERVAL_MS}, onStart=${SOURCE_REFRESH_ON_START}, forceRefresh=${SOURCE_REFRESH_FORCE}, sources=${SOURCE_REFRESH_SOURCES.length}`
+  );
+
+  if (SOURCE_REFRESH_ON_START) {
+    runPeriodicSourceRefresh('startup');
+  }
+
+  refreshTimer = setInterval(() => {
+    runPeriodicSourceRefresh('interval');
+  }, SOURCE_REFRESH_INTERVAL_MS);
+}
 
 function sendJson(res, statusCode, payload, extraHeaders = {}) {
   res.writeHead(statusCode, {
@@ -227,4 +316,15 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`API server running at http://${HOST}:${PORT}`);
+  schedulePeriodicSourceRefresh();
 });
+
+function shutdown() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

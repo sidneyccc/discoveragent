@@ -29,6 +29,17 @@ npm run web
 npm run api
 ```
 
+The local API server now runs a background source refresh job by default (startup + every 30 minutes), independent of page loads.
+
+Optional env vars for the background refresh:
+
+- `SOURCE_REFRESH_ENABLED`: set to `false` to disable periodic refresh
+- `SOURCE_REFRESH_ON_START`: set to `false` to skip immediate startup refresh
+- `SOURCE_REFRESH_INTERVAL_MS`: refresh interval in milliseconds (minimum 60000)
+- `SOURCE_REFRESH_FORCE`: set to `true` to bypass cache and force full refresh each run (default: `true`)
+- `SOURCE_REFRESH_LANG`: preferred language passed into source workflow (default: `en-US`)
+- `SOURCE_REFRESH_SOURCES_JSON`: JSON array of `{ "name": "...", "url": "..." }` to override default source list
+
 ### 4) Optional: enable global Redis cache
 
 The source workflow endpoint supports cross-instance cache via Redis REST (recommended for deployed environments with multiple server instances).
@@ -40,6 +51,11 @@ Add these env vars:
 - `REDIS_KEY_PREFIX`: optional key namespace (default: `sidagent`)
 
 If Redis is not configured, the API automatically falls back to in-memory cache.
+
+## Product and Design Docs
+
+- Product Brief: `/docs/PRODUCT_BRIEF.md`
+- Technical Design: `/docs/TECHNICAL_DESIGN.md`
 
 ## Build and Deploy
 
@@ -79,6 +95,9 @@ api/
 backend/
   api-core.js         Shared API business logic (single source of truth)
   server.js           Local HTTP server using api-core handlers
+docs/
+  PRODUCT_BRIEF.md    Product goals, use cases, scope, and constraints
+  TECHNICAL_DESIGN.md Architecture, flows, caching, and runtime behavior
 ```
 
 ## API Architecture
