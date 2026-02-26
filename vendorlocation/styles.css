@@ -90,6 +90,90 @@ input:focus {
   margin-top: 0.8rem;
 }
 
+.toggle-group {
+  display: grid;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+.toggle-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  color: #2f455c;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
+.toggle-option input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.toggle-option:has(input:checked) {
+  border-color: #9fcde2;
+  background: #f1f9fd;
+}
+
+.legend {
+  margin-top: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem;
+  background: #fbfdff;
+}
+
+.legend.hidden {
+  display: none;
+}
+
+.legend h3 {
+  margin: 0 0 0.45rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.83rem;
+  color: #2f455c;
+}
+
+.legend-row + .legend-row {
+  margin-top: 0.38rem;
+}
+
+.legend-dot {
+  display: inline-block;
+  border-radius: 999px;
+  flex: 0 0 auto;
+}
+
+.legend-gradient {
+  width: 42px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(20, 40, 70, 0.15);
+  background: linear-gradient(90deg, rgb(34, 125, 255) 0%, rgb(228, 57, 53) 100%);
+  flex: 0 0 auto;
+}
+
+.legend-dot-approx {
+  width: 14px;
+  height: 14px;
+  background: rgba(255, 125, 0, 0.35);
+  border: 2px solid rgba(153, 76, 0, 0.8);
+}
+
 button {
   border: 0;
   border-radius: 10px;

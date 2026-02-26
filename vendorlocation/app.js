@@ -52,12 +52,15 @@ const geocodeBtn = document.getElementById("geocodeBtn");
 const clearCacheBtn = document.getElementById("clearCacheBtn");
 const summary = document.getElementById("summary");
 const vendorList = document.getElementById("vendorList");
+const markerLegend = document.getElementById("markerLegend");
+const markerStyleInputs = Array.from(document.querySelectorAll('input[name="markerStyle"]'));
 
 const markerLayer = L.layerGroup().addTo(map);
 let markerById = new Map();
 let vendors = [];
 let filteredVendors = [];
 let geocodeCache = loadGeocodeCache();
+let markerStyle = "emphasis";
 
 function parseCSV(text) {
   const rows = [];
@@ -124,6 +127,33 @@ function formatMoney(raw) {
     currency: "CAD",
     maximumFractionDigits: 2,
   }).format(numeric);
+}
+
+function parseClaimAmount(raw) {
+  const numeric = Number(String(raw || "").replace(/,/g, "").trim());
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : 0;
+}
+
+function mixChannel(start, end, t) {
+  return Math.round(start + (end - start) * t);
+}
+
+function claimColor(emphasis) {
+  const t = Math.max(0, Math.min(1, emphasis));
+  const fill = {
+    r: mixChannel(34, 228, t),
+    g: mixChannel(125, 57, t),
+    b: mixChannel(255, 53, t),
+  };
+  const stroke = {
+    r: mixChannel(22, 150, t),
+    g: mixChannel(82, 24, t),
+    b: mixChannel(190, 24, t),
+  };
+  return {
+    fill: `rgb(${fill.r}, ${fill.g}, ${fill.b})`,
+    stroke: `rgb(${stroke.r}, ${stroke.g}, ${stroke.b})`,
+  };
 }
 
 function normalizeAddress(address) {
@@ -232,13 +262,38 @@ function renderMarkers() {
   markerLayer.clearLayers();
   markerById = new Map();
 
+  const claimedValues = filteredVendors
+    .map((vendor) => parseClaimAmount(vendor.claim_amount))
+    .filter((value) => value > 0);
+  const minClaim = claimedValues.length ? Math.min(...claimedValues) : 0;
+  const maxClaim = claimedValues.length ? Math.max(...claimedValues) : 0;
+
   const bounds = [];
   filteredVendors.forEach((vendor) => {
     if (!vendor.coords) {
       return;
     }
 
-    const marker = L.marker([vendor.coords.lat, vendor.coords.lng]).addTo(markerLayer);
+    let marker;
+    if (markerStyle === "plain") {
+      marker = L.marker([vendor.coords.lat, vendor.coords.lng]).addTo(markerLayer);
+    } else {
+      const claimValue = parseClaimAmount(vendor.claim_amount);
+      const range = maxClaim - minClaim;
+      const normalized = range > 0 ? (claimValue - minClaim) / range : 0.5;
+      const emphasis = Math.sqrt(Math.max(0, normalized));
+      const radius = 6 + emphasis * 14;
+      const colors = claimColor(emphasis);
+
+      marker = L.circleMarker([vendor.coords.lat, vendor.coords.lng], {
+        radius,
+        color: colors.stroke,
+        weight: 1.5 + emphasis * 1.5,
+        opacity: 0.95,
+        fillColor: colors.fill,
+        fillOpacity: vendor.coordsSource === "geocoded" ? 0.75 : 0.4,
+      }).addTo(markerLayer);
+    }
     marker.bindPopup(`
       <strong>${vendor.vendor_name}</strong><br />
       ${vendor.address}<br />
@@ -252,6 +307,12 @@ function renderMarkers() {
 
   if (bounds.length) {
     map.fitBounds(bounds, { padding: [24, 24], maxZoom: 12 });
+  }
+}
+
+function updateMarkerStyleUI() {
+  if (markerLegend) {
+    markerLegend.classList.toggle("hidden", markerStyle !== "emphasis");
   }
 }
 
@@ -375,5 +436,16 @@ async function loadVendors() {
 searchInput.addEventListener("input", applyFilters);
 geocodeBtn.addEventListener("click", geocodeMissing);
 clearCacheBtn.addEventListener("click", clearCache);
+markerStyleInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    if (!input.checked) {
+      return;
+    }
+    markerStyle = input.value === "plain" ? "plain" : "emphasis";
+    updateMarkerStyleUI();
+    renderMarkers();
+  });
+});
 
+updateMarkerStyleUI();
 loadVendors();

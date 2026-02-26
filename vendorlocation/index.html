@@ -25,15 +25,34 @@
         <label class="field" for="searchInput">Search vendor/address</label>
         <input id="searchInput" type="text" placeholder="e.g. Toronto or Canada Royal Milk" />
 
+        <div class="field">Map style</div>
+        <div class="toggle-group" id="markerStyleToggle" role="radiogroup" aria-label="Map marker style">
+          <label class="toggle-option">
+            <input type="radio" name="markerStyle" value="emphasis" checked />
+            <span>Emphasized (by claim)</span>
+          </label>
+          <label class="toggle-option">
+            <input type="radio" name="markerStyle" value="plain" />
+            <span>Plain pins</span>
+          </label>
+        </div>
+
         <div class="actions">
           <button id="geocodeBtn" type="button">Geocode Missing Locations</button>
           <button id="clearCacheBtn" type="button" class="secondary">Clear Geocode Cache</button>
         </div>
 
-        <div class="note">
-          Run with a local server, for example:
-          <code>python3 -m http.server 4173</code>
-        </div>
+        <section class="legend" id="markerLegend" aria-label="Map marker legend">
+          <h3>Map Legend</h3>
+          <div class="legend-row">
+            <span class="legend-gradient" aria-hidden="true"></span>
+            <span>Claim amount scale: blue (smaller) -> red (larger)</span>
+          </div>
+          <div class="legend-row">
+            <span class="legend-dot legend-dot-approx"></span>
+            <span>Lighter fill = approximate location (estimated from city/province, not exact address geocode)</span>
+          </div>
+        </section>
 
         <div class="summary" id="summary">Loading data...</div>
       </section>
