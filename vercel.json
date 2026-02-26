@@ -2,6 +2,13 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build:web",
   "outputDirectory": "dist",
+  "redirects": [
+    {
+      "source": "/vendorlocation",
+      "destination": "/vendorlocation/",
+      "permanent": false
+    }
+  ],
   "crons": [
     {
       "path": "/api/cron-source-refresh",

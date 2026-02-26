@@ -1,0 +1,201 @@
+:root {
+  --bg: #f3f6fb;
+  --panel: #ffffff;
+  --text: #10243a;
+  --muted: #5f6f85;
+  --accent: #0b7fab;
+  --accent-strong: #095d7e;
+  --border: #d8e2ef;
+  --shadow: 0 10px 24px rgba(18, 34, 51, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 95% 10%, #d8ecff 0%, rgba(216, 236, 255, 0) 40%),
+    radial-gradient(circle at 10% 95%, #d6f6ef 0%, rgba(214, 246, 239, 0) 45%),
+    var(--bg);
+  min-height: 100vh;
+}
+
+.topbar {
+  padding: 1.2rem 1.4rem 0.5rem;
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.topbar p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 300px minmax(320px, 1fr) 340px;
+  gap: 1rem;
+  padding: 1rem 1.4rem 1.4rem;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.controls,
+.list-wrap {
+  padding: 1rem;
+}
+
+h2 {
+  font-size: 1rem;
+  margin: 0 0 0.8rem;
+}
+
+.field {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.7rem 0 0.35rem;
+}
+
+input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.62rem 0.68rem;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: #fff;
+}
+
+input:focus {
+  outline: 2px solid #d7edfa;
+  border-color: var(--accent);
+}
+
+.actions {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+
+button {
+  border: 0;
+  border-radius: 10px;
+  padding: 0.58rem 0.72rem;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #627c9e;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.note {
+  margin-top: 0.8rem;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.note code {
+  display: inline-block;
+  margin-top: 0.2rem;
+  color: #17415d;
+}
+
+.summary {
+  margin-top: 0.9rem;
+  padding: 0.62rem;
+  border-radius: 10px;
+  background: #edf8fd;
+  color: var(--accent-strong);
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.map-wrap {
+  overflow: hidden;
+}
+
+#map {
+  width: 100%;
+  height: calc(100vh - 180px);
+  min-height: 420px;
+}
+
+.vendor-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.65rem;
+  max-height: calc(100vh - 230px);
+  overflow-y: auto;
+}
+
+.vendor-item {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.vendor-item:hover,
+.vendor-item.active {
+  border-color: var(--accent);
+  background: #f3fafe;
+}
+
+.vendor-name {
+  font-weight: 700;
+  margin-bottom: 0.18rem;
+}
+
+.vendor-meta {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.vendor-amount {
+  margin-top: 0.2rem;
+  font-weight: 700;
+  color: #153c58;
+  font-size: 0.84rem;
+}
+
+@media (max-width: 1050px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+
+  #map {
+    height: 420px;
+  }
+
+  .vendor-list {
+    max-height: 320px;
+  }
+}
