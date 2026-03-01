@@ -15,10 +15,10 @@ try {
 }
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 10;
-const SOURCE_SUMMARY_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
-const SOURCE_WORKFLOW_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+const SOURCE_SUMMARY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const SOURCE_WORKFLOW_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const SOURCE_WORKFLOW_CACHE_TTL_SEC = Math.floor(SOURCE_WORKFLOW_CACHE_TTL_MS / 1000);
-const ASK_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+const ASK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const ASK_CACHE_TTL_SEC = Math.floor(ASK_CACHE_TTL_MS / 1000);
 const METRICS_RECENT_REQUEST_LIMIT = 120;
 const METRICS_RECENT_REFRESH_LIMIT = 120;
@@ -810,11 +810,13 @@ async function summarizeSource({ sourceName, sourceUrl, preferredLanguage }) {
 
   ensureApiKey();
   const pageText = await fetchPageText(normalizedSourceUrl);
+  const summaryGeneratedAt = new Date().toISOString();
 
   const userPrompt = `
 Source name: ${normalizedSourceName}
 Source URL: ${normalizedSourceUrl}
 Preferred output language: ${targetLanguage || 'same as user query language'}
+Summary generated at: ${summaryGeneratedAt}
 
 Visible page text snapshot:
 ${pageText}
@@ -825,10 +827,12 @@ Task:
 2) Otherwise summarize the latest important things visible on this source homepage snapshot.
 3) Prioritize concrete, recent, high-signal items (major events, announcements, policy changes, market-moving updates).
 4) Return 4-8 concise bullets.
-5) Add a final bullet called "Limits" noting this is from a homepage snapshot and may miss paywalled/section pages.
-6) Do not mention underlying model, vendor, or provider.
-7) If preferred language is provided, output in that language.
-8) Remove nonsensical fragments, malformed snippets, navigation noise, and duplicated points.
+5) For each substantive bullet, start with "[Source Date: YYYY-MM-DD HH:mm TZ]" if an explicit source publish/update time is visible, otherwise "[Source Date: Unknown]".
+6) Add a final bullet exactly in this format: "- Generated At: ${summaryGeneratedAt}".
+7) Add one more final bullet called "Limits" noting this is from a homepage snapshot and may miss paywalled/section pages.
+8) Do not mention underlying model, vendor, or provider.
+9) If preferred language is provided, output in that language.
+10) Remove nonsensical fragments, malformed snippets, navigation noise, and duplicated points.
 `.trim();
 
   const responseJson = await postResponsesApi(
@@ -849,7 +853,7 @@ Task:
   return result;
 }
 
-async function summarizeAndClusterSources({ sources, preferredLanguage }) {
+async function summarizeAndClusterSources({ sources, preferredLanguage, workflowGeneratedAt = new Date().toISOString() }) {
   if (!Array.isArray(sources) || !sources.length) {
     throw new ApiError(400, 'At least one source is required.');
   }
@@ -896,21 +900,25 @@ async function summarizeAndClusterSources({ sources, preferredLanguage }) {
 
   const userPrompt = `
 Preferred output language: ${targetLanguage || 'same as user language'}
+Workflow generated at: ${workflowGeneratedAt}
 
 You are given homepage snapshots from multiple sources. Summarize and cluster the latest important topics.
 
 Requirements:
 1) Output a ranked list of clustered items, ordered by coverage breadth (most sources mentioning the topic first).
 2) Cap the list to 20 items maximum.
-3) For each item include:
-   - Title
-   - Sources: comma-separated source names
-   - Source count: N
+3) For each item include this exact field order:
+   - Title: <short headline>
+   - Sources: <comma-separated source names>
+   - Source count: <N>
+   - Source Dates: <source name=YYYY-MM-DD HH:mm TZ or Unknown; source name=...>
+   - Generated At: ${workflowGeneratedAt}
    - 2-4 bullet points summarizing the key developments
 4) If a source disagrees materially with others, mention that in the item.
 5) Exclude trivial/low-signal topics.
 6) If preferred language is provided, output in that language.
 7) Do not mention underlying model, vendor, or provider.
+8) If an explicit source publish/update time is not visible, write "Unknown" for that source instead of guessing.
 
 Source snapshots:
 ${snapshots}
@@ -928,7 +936,7 @@ ${snapshots}
   };
 }
 
-async function categorizeSourceSummaries({ sourceSummaries, preferredLanguage }) {
+async function categorizeSourceSummaries({ sourceSummaries, preferredLanguage, workflowGeneratedAt = new Date().toISOString() }) {
   if (!Array.isArray(sourceSummaries) || !sourceSummaries.length) {
     throw new ApiError(400, 'At least one source summary is required.');
   }
@@ -959,22 +967,26 @@ async function categorizeSourceSummaries({ sourceSummaries, preferredLanguage })
 
   const userPrompt = `
 Preferred output language: ${targetLanguage || 'same as user language'}
+Workflow generated at: ${workflowGeneratedAt}
 
 You are given per-source summaries. Cluster and prioritize the shared stories.
 
 Requirements:
 1) Rank clustered items by coverage breadth (most sources mentioning first).
 2) Cap to 20 items maximum.
-3) For each item include:
-   - Title
-   - Sources: comma-separated source names
-   - Source count: N
+3) For each item include this exact field order:
+   - Title: <short headline>
+   - Sources: <comma-separated source names>
+   - Source count: <N>
+   - Source Dates: <source name=YYYY-MM-DD HH:mm TZ or Unknown; source name=...>
+   - Generated At: ${workflowGeneratedAt}
    - 2-4 concise bullet points
 4) Mention meaningful disagreement where present.
 5) Keep high-signal topics only.
 6) If preferred language is provided, output in that language.
 7) Do not mention underlying model, vendor, or provider.
 8) Remove items that are unclear, incoherent, or nonsensical.
+9) If an explicit source publish/update time is not available from the source summaries, write "Unknown" instead of guessing.
 
 Per-source summaries:
 ${payload}
@@ -1099,6 +1111,7 @@ async function setAskInRedis(cacheKey, value) {
 
 async function runSourceWorkflow({ sources, preferredLanguage }) {
   const startedAt = Date.now();
+  const workflowGeneratedAt = new Date().toISOString();
   const sourceList = Array.isArray(sources) ? sources : [];
   if (!sourceList.length) {
     throw new ApiError(400, 'At least one source is required.');
@@ -1144,6 +1157,7 @@ async function runSourceWorkflow({ sources, preferredLanguage }) {
       const clusteredRes = await categorizeSourceSummaries({
         sourceSummaries: usable.map((s) => ({ name: s.name, url: s.url, summary: s.summary })),
         preferredLanguage,
+        workflowGeneratedAt,
       });
       clustered = clusteredRes.clustered || '';
     }
@@ -1158,7 +1172,7 @@ async function runSourceWorkflow({ sources, preferredLanguage }) {
         hiddenCount,
         usableCount: usable.length,
       },
-      generatedAt: new Date().toISOString(),
+      generatedAt: workflowGeneratedAt,
     };
 
     recordSourceRefreshRun({

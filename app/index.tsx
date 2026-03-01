@@ -101,6 +101,19 @@ function splitRankedClusters(text: string) {
   return [normalized];
 }
 
+function formatGeneratedTimestamp(value: string, locale: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(locale || undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 function sourceBadge(label: string, backgroundColor: string, color = '#fff') {
   return (
     <View style={[styles.sourceBadge, { backgroundColor }]}>
@@ -124,7 +137,7 @@ const DEFAULT_SELECTED_SOURCES = [
   'Wikipedia',
 ];
 const TOP_NEWS_PREFETCH_COUNT = 5;
-const WORKFLOW_CLIENT_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+const WORKFLOW_CLIENT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 export default function HomeScreen() {
   const { width: viewportWidth } = useWindowDimensions();
@@ -176,6 +189,7 @@ export default function HomeScreen() {
   }>>([]);
   const [clusteredSourcesResult, setClusteredSourcesResult] = useState('');
   const [clusteredSourcesMeta, setClusteredSourcesMeta] = useState('');
+  const [workflowGeneratedAt, setWorkflowGeneratedAt] = useState('');
   const [showSourceSummaries, setShowSourceSummaries] = useState(false);
   const [selectedRankedNewsIndex, setSelectedRankedNewsIndex] = useState<number | null>(null);
   const [isNewsDetailLoading, setIsNewsDetailLoading] = useState(false);
@@ -460,6 +474,7 @@ export default function HomeScreen() {
   const applyWorkflowResponse = (data: any, cacheHitOverride?: boolean) => {
     const summaries = Array.isArray(data?.sourceSummaries) ? data.sourceSummaries : [];
     setAllSourceSummaries(summaries);
+    setWorkflowGeneratedAt(typeof data?.generatedAt === 'string' ? data.generatedAt : '');
     setClusteredSourcesResult(
       typeof data?.clustered === 'string' && data.clustered.trim() ? data.clustered.trim() : ''
     );
@@ -825,6 +840,7 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
       setAllSourceSummaries([]);
       setClusteredSourcesResult('');
       setClusteredSourcesMeta('');
+      setWorkflowGeneratedAt('');
       setSelectedRankedNewsIndex(null);
       setNewsDetailText('');
       setNewsDetailError('');
@@ -1047,6 +1063,11 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
                       onPress={() => handleLearnMoreNews(clusterText, idx)}
                     >
                       <View style={styles.clusterCardBody}>{renderRichText(clusterText)}</View>
+                      {workflowGeneratedAt ? (
+                        <Text style={styles.clusterCardMetaText}>
+                          {isZh ? '生成时间' : 'Generated At'}: {formatGeneratedTimestamp(workflowGeneratedAt, preferredLanguage)}
+                        </Text>
+                      ) : null}
                       <View style={styles.clusterLearnMoreButton}>
                         <Text style={styles.clusterLearnMoreText}>{isZh ? '深入了解' : 'Learn More'}</Text>
                       </View>
@@ -1069,6 +1090,11 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
                       onPress={() => handleLearnMoreNews(clusterText, idx)}
                     >
                       <View style={styles.clusterCardBody}>{renderRichText(clusterText)}</View>
+                      {workflowGeneratedAt ? (
+                        <Text style={styles.clusterCardMetaText}>
+                          {isZh ? '生成时间' : 'Generated At'}: {formatGeneratedTimestamp(workflowGeneratedAt, preferredLanguage)}
+                        </Text>
+                      ) : null}
                       <View style={styles.clusterLearnMoreButton}>
                         <Text style={styles.clusterLearnMoreText}>{isZh ? '深入了解' : 'Learn More'}</Text>
                       </View>
@@ -1604,6 +1630,11 @@ const styles = StyleSheet.create({
   },
   clusterCardBody: {
     gap: 4,
+  },
+  clusterCardMetaText: {
+    marginTop: 8,
+    fontSize: 11,
+    color: '#64748b',
   },
   clusterLearnMoreButton: {
     marginTop: 10,

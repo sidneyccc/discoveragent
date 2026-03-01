@@ -54,9 +54,9 @@ The refresh endpoint validates this token before running.
 
 If you upgrade to Vercel Pro, you can switch back to a higher-frequency schedule (for example every 30 minutes).
 
-### 3.2) Production periodic refresh every 3 hours (GitHub Actions)
+### 3.2) Production periodic refresh every 6 hours (GitHub Actions)
 
-This repo includes `.github/workflows/cron-source-refresh.yml` to trigger refresh every 3 hours.
+This repo includes `.github/workflows/cron-source-refresh.yml` to trigger refresh every 6 hours.
 
 Set these GitHub repository secrets:
 
@@ -65,7 +65,7 @@ Set these GitHub repository secrets:
 
 You can also trigger it manually from GitHub Actions using `workflow_dispatch`.
 
-For the website to reuse prewarmed cache across Vercel serverless instances, configure Redis (`REDIS_REST_URL` + `REDIS_REST_TOKEN`). Without Redis, the browser can still reuse its own local 3-hour cache, but server-side in-memory cache is not reliable across cold starts.
+For the website to reuse prewarmed cache across Vercel serverless instances, configure Redis (`REDIS_REST_URL` + `REDIS_REST_TOKEN`). Without Redis, the browser can still reuse its own local 6-hour cache, but server-side in-memory cache is not reliable across cold starts.
 
 ### 4) Optional: enable global Redis cache
 
