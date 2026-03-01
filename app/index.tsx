@@ -124,6 +124,7 @@ const DEFAULT_SELECTED_SOURCES = [
   'Wikipedia',
 ];
 const TOP_NEWS_PREFETCH_COUNT = 5;
+const WORKFLOW_CLIENT_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 
 export default function HomeScreen() {
   const { width: viewportWidth } = useWindowDimensions();
@@ -414,6 +415,69 @@ export default function HomeScreen() {
     Platform.OS === 'web' &&
     typeof navigator !== 'undefined' &&
     /iPad|iPhone|iPod/.test(navigator.userAgent);
+
+  const getWorkflowClientCacheKey = () => `discoveragent:source-workflow:${preferredLanguage}`;
+
+  const readWorkflowClientCache = () => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || !window.localStorage) return null;
+
+    try {
+      const raw = window.localStorage.getItem(getWorkflowClientCacheKey());
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw);
+      const ts = typeof parsed?.ts === 'number' ? parsed.ts : 0;
+      const data = parsed?.data;
+      if (!ts || !data) return null;
+
+      if (Date.now() - ts >= WORKFLOW_CLIENT_CACHE_TTL_MS) {
+        window.localStorage.removeItem(getWorkflowClientCacheKey());
+        return null;
+      }
+
+      return { ts, data };
+    } catch {
+      return null;
+    }
+  };
+
+  const writeWorkflowClientCache = (data: any) => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined' || !window.localStorage) return;
+
+    try {
+      window.localStorage.setItem(
+        getWorkflowClientCacheKey(),
+        JSON.stringify({
+          ts: Date.now(),
+          data,
+        })
+      );
+    } catch {
+      // Ignore storage failures and continue with in-memory state.
+    }
+  };
+
+  const applyWorkflowResponse = (data: any, cacheHitOverride?: boolean) => {
+    const summaries = Array.isArray(data?.sourceSummaries) ? data.sourceSummaries : [];
+    setAllSourceSummaries(summaries);
+    setClusteredSourcesResult(
+      typeof data?.clustered === 'string' && data.clustered.trim() ? data.clustered.trim() : ''
+    );
+
+    const meta = data?.meta || {};
+    const fetchedCount = typeof meta.fetchedCount === 'number' ? meta.fetchedCount : summaries.length;
+    const totalSources = typeof meta.totalSources === 'number' ? meta.totalSources : summaries.length;
+    const hiddenCount = typeof meta.hiddenCount === 'number' ? meta.hiddenCount : 0;
+    const cacheHit = typeof cacheHitOverride === 'boolean' ? cacheHitOverride : Boolean(data?.cache?.hit);
+    setClusteredSourcesMeta(isZh
+      ? `已抓取 ${fetchedCount}/${totalSources} 个来源摘要。` +
+        (hiddenCount > 0 ? ` 已过滤 ${hiddenCount} 个不可用来源页面。` : '') +
+        (cacheHit ? '（来自缓存）' : '（最新刷新）')
+      : `Fetched summaries for ${fetchedCount}/${totalSources} sources.` +
+        (hiddenCount > 0 ? ` Filtered ${hiddenCount} unusable source pages.` : '') +
+        (cacheHit ? ' (served from cache)' : ' (fresh refresh)')
+    );
+  };
 
   const canUseSpeechRecognition =
     Platform.OS === 'web' &&
@@ -757,31 +821,22 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
     const requestSeq = ++workflowRequestSeqRef.current;
     setIsAllSourcesLoading(true);
     setAllSourcesError('');
-    setAllSourceSummaries([]);
-    setClusteredSourcesResult('');
-    setClusteredSourcesMeta('');
-    setSelectedRankedNewsIndex(null);
-    setNewsDetailText('');
-    setNewsDetailError('');
-    setIsNewsDetailLoading(false);
+    if (forceRefresh || !clusteredSourcesResult.trim()) {
+      setAllSourceSummaries([]);
+      setClusteredSourcesResult('');
+      setClusteredSourcesMeta('');
+      setSelectedRankedNewsIndex(null);
+      setNewsDetailText('');
+      setNewsDetailError('');
+      setIsNewsDetailLoading(false);
+    }
 
     try {
-      let res: Response;
-      try {
-        res = await fetch(`${apiBaseUrl}/api/source-workflow`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            sources: sources.map((s) => ({ name: s.name, url: s.url })),
-            preferredLanguage,
-            forceRefresh,
-          }),
-        });
-      } catch {
-        if (apiBaseUrl === localApiBaseUrl) {
-          res = await fetch(`${fallbackHostedApiBaseUrl}/api/source-workflow`, {
+      const fetchWorkflow = async (baseUrl: string) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 65000);
+        try {
+          return await fetch(`${baseUrl}/api/source-workflow`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -791,7 +846,19 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
               preferredLanguage,
               forceRefresh,
             }),
+            signal: controller.signal,
           });
+        } finally {
+          clearTimeout(timeout);
+        }
+      };
+
+      let res: Response;
+      try {
+        res = await fetchWorkflow(apiBaseUrl);
+      } catch {
+        if (apiBaseUrl === localApiBaseUrl) {
+          res = await fetchWorkflow(fallbackHostedApiBaseUrl);
         } else {
           throw new Error('source-workflow-fetch-failed');
         }
@@ -802,29 +869,19 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
         throw new Error(typeof data?.error === 'string' ? data.error : 'Failed to fetch source workflow.');
       }
       if (workflowRequestSeqRef.current !== requestSeq) return;
-
-      const summaries = Array.isArray(data?.sourceSummaries) ? data.sourceSummaries : [];
-      setAllSourceSummaries(summaries);
-      setClusteredSourcesResult(
-        typeof data?.clustered === 'string' && data.clustered.trim() ? data.clustered.trim() : ''
-      );
-
-      const meta = data?.meta || {};
-      const fetchedCount = typeof meta.fetchedCount === 'number' ? meta.fetchedCount : summaries.length;
-      const totalSources = typeof meta.totalSources === 'number' ? meta.totalSources : summaries.length;
-      const hiddenCount = typeof meta.hiddenCount === 'number' ? meta.hiddenCount : 0;
-      const cacheHit = Boolean(data?.cache?.hit);
-      setClusteredSourcesMeta(isZh
-        ? `已抓取 ${fetchedCount}/${totalSources} 个来源摘要。` +
-          (hiddenCount > 0 ? ` 已过滤 ${hiddenCount} 个不可用来源页面。` : '') +
-          (cacheHit ? '（来自缓存）' : '（最新刷新）')
-        : `Fetched summaries for ${fetchedCount}/${totalSources} sources.` +
-          (hiddenCount > 0 ? ` Filtered ${hiddenCount} unusable source pages.` : '') +
-          (cacheHit ? ' (served from cache)' : ' (fresh refresh)')
-      );
-    } catch {
+      applyWorkflowResponse(data);
+      writeWorkflowClientCache(data);
+    } catch (error) {
       if (workflowRequestSeqRef.current !== requestSeq) return;
-      setAllSourcesError(isZh ? `无法连接 API 服务：${apiBaseUrl}` : `Could not connect to API server at ${apiBaseUrl}.`);
+      if (error instanceof Error && error.name === 'AbortError') {
+        setAllSourcesError(
+          isZh
+            ? '刷新超时（超过 65 秒）。可能是强制刷新正在抓取过多来源，请稍后重试。'
+            : 'Refresh timed out after 65s. A forced refresh may be fetching too many sources; please retry shortly.'
+        );
+      } else {
+        setAllSourcesError(isZh ? `无法连接 API 服务：${apiBaseUrl}` : `Could not connect to API server at ${apiBaseUrl}.`);
+      }
     } finally {
       if (workflowRequestSeqRef.current !== requestSeq) return;
       setIsAllSourcesLoading(false);
@@ -876,11 +933,31 @@ ${isZh ? '5) 必须使用简体中文输出。' : '5) Output must be in English.
   }, [clusteredSourcesResult, fetchNewsDetail, getNewsDetailCacheKey]);
 
   useEffect(() => {
-    handleSummarizeAllSources(false);
-    const interval = setInterval(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
+    const beginRecurringRefresh = (initialDelayMs: number) => {
+      timeout = setTimeout(() => {
+        handleSummarizeAllSources(false);
+        interval = setInterval(() => {
+          handleSummarizeAllSources(false);
+        }, WORKFLOW_CLIENT_CACHE_TTL_MS);
+      }, initialDelayMs);
+    };
+
+    const cached = readWorkflowClientCache();
+    if (cached) {
+      applyWorkflowResponse(cached.data, true);
+      beginRecurringRefresh(Math.max(0, WORKFLOW_CLIENT_CACHE_TTL_MS - (Date.now() - cached.ts)));
+    } else {
       handleSummarizeAllSources(false);
-    }, 6 * 60 * 60 * 1000);
-    return () => clearInterval(interval);
+      beginRecurringRefresh(WORKFLOW_CLIENT_CACHE_TTL_MS);
+    }
+
+    return () => {
+      if (timeout) clearTimeout(timeout);
+      if (interval) clearInterval(interval);
+    };
   }, [preferredLanguage]);
 
   useEffect(() => {
